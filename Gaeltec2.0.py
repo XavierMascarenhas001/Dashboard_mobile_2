@@ -722,7 +722,7 @@ if resume_file is not None:
     with col_top_right:
         st.markdown("<h3 style='text-align:center; color:white;'>Works Complete </h3>", unsafe_allow_html=True)
 
-'''
+
         # --- Top-right Pie Chart: % Complete ---
         try:
             # Ensure resume_df exists
@@ -839,7 +839,7 @@ if resume_file is not None:
                 st.info("No data available for the selected filters.")
 
         except Exception as e:
-            st.warning(f"Could not generate projects timeline chart: {e}")
+            st.warning(f"Could not generate projects timeline chart: {e}")'''
     # -------------------------------
     # --- Map Section ---
     # -------------------------------
