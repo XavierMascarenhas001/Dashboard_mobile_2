@@ -1088,7 +1088,7 @@ if resume_file is not None:
         # --- Scottish Weather Widget ---
         try:
             # Get API key from secrets
-            api_key = st.secrets.get("WEATHER_API_KEY")
+            api_key = st.secrets.get("f5cffb348545e9dbcbb5ff46a7e874ee")
             
             if not api_key:
                 st.info("Weather API key not configured")
