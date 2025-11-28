@@ -11,6 +11,8 @@ from PIL import Image
 from io import BytesIO
 import base64
 from streamlit_plotly_events import plotly_events
+import plotly.graph_objects as go
+import matplotlib.pyplot as plt
 
 # --- Page config for wide layout ---
 st.set_page_config(
@@ -20,11 +22,13 @@ st.set_page_config(
 )
 
 def sanitize_sheet_name(name: str) -> str:
-
+    """
+    Remove or replace invalid characters for Excel sheet names.
+    Excel sheet names cannot contain: : \ / ? * [ ]
+    """
     name = str(name)
-    # Replace any invalid character with underscore
-    name = re.sub(r'[^A-Za-z0-9 _-]', '_', name)
-    # Truncate to 31 chars
+    name = re.sub(r'[:\\/*?\[\]]', '_', name)
+    name = re.sub(r'[^\x00-\x7F]', '_', name)
     return name[:31]
 
 # --- MAPPINGS ---
@@ -87,6 +91,7 @@ mapping_region = {
 
 # --- File Project Mapping ---
 file_project_mapping = {
+    "pcb 2022": ["Ayrshire", "PCB"],
     "33kv refurb": ["Ayrshire", "33kv Refurb"],
     "connections": ["Ayrshire", "Connections"],
     "storms": ["Ayrshire", "Storms"],
@@ -539,17 +544,17 @@ foundation_steelwork_keys = {
 }
 
 categories = [
-    ("Poles", pole_keys, "Quantity"),
-    ("Transformers", transformer_keys, "Quantity"),
+    ("Poles 🪵", pole_keys, "Quantity"),
+    ("Transformers ⚡🏭", transformer_keys, "Quantity"),
     ("Conductors", conductor_keys, "Length (Km)"),
     ("Conductors_2", conductor_2_keys, "Length (Km)"),
     ("Equipment", equipment_keys, "Quantity"),
     ("Insulators", insulator_keys, "Quantity"),
     ("LV Joints (Kits)", lv_joint_kit_keys, "Quantity"),
     ("LV Joint Modules", lv_joint_module_keys, "Quantity"),
-    ("HV Joints / Terminations", hv_joint_termination_keys, "Quantity"),
-    ("Cable Accessories", cable_accessory_keys, "Quantity"),
-    ("Foundation & Steelwork", foundation_steelwork_keys, "Quantity")
+    ("HV Joints / Terminations ⚡", hv_joint_termination_keys, "Quantity"),
+    ("Cable Accessories 🔌", cable_accessory_keys, "Quantity"),
+    ("Foundation & Steelwork 🏗️", foundation_steelwork_keys, "Quantity")
 ]
 
 
@@ -569,8 +574,8 @@ gradient_bg = """
 st.markdown(gradient_bg, unsafe_allow_html=True)
 
 # --- Load logos ---
-logo_left = Image.open(r"C:\Users\Xavier.Mascarenhas\OneDrive - Gaeltec Utilities Ltd\Desktop\Gaeltec\06_Programs\Dashboard\Images\GaeltecImage.png").resize((80, 80))
-logo_right = Image.open(r"C:\Users\Xavier.Mascarenhas\OneDrive - Gaeltec Utilities Ltd\Desktop\Gaeltec\06_Programs\Dashboard\Images\SPEN.png").resize((160, 80))
+logo_left = Image.open(r"Images/GaeltecImage.png").resize((80, 80))
+logo_right = Image.open(r"Images/SPEN.png").resize((160, 80))
 
 # --- Header layout ---
 col1, col2, col3 = st.columns([1, 4, 1])
@@ -583,7 +588,8 @@ st.markdown("<h1>📊 Data Management Dashboard</h1>", unsafe_allow_html=True)
 # --- File Upload & Initial DF ---
 # -------------------------------
 # --- Upload Aggregated Parquet file ---
-aggregated_file = st.file_uploader("Upload aggregated Parquet file", type=["parquet"])
+# --- Load aggregated Parquet file ---
+aggregated_file = r"CF_aggregated.parquet"
 if aggregated_file is not None:
     df = pd.read_parquet(aggregated_file)
     df.columns = df.columns.str.strip().str.lower()  # normalize columns
@@ -591,13 +597,10 @@ if aggregated_file is not None:
     if 'datetouse' in df.columns:
         # Convert to datetime where possible
         df['datetouse_dt'] = pd.to_datetime(df['datetouse'], errors='coerce')
-
         # Create display column
         df['datetouse_display'] = df['datetouse_dt'].dt.strftime("%d/%m/%Y")
-
         # Mark empty dates as "Unplanned"
         df.loc[df['datetouse_dt'].isna(), 'datetouse_display'] = "Unplanned"
-
         # OPTIONAL: normalize datetime column for sorting, keeping NaT intact
         df['datetouse_dt'] = df['datetouse_dt'].dt.normalize()
     else:
@@ -605,9 +608,8 @@ if aggregated_file is not None:
         df['datetouse_dt'] = pd.NaT
         df['datetouse_display'] = "Unplanned"
 
-
-# --- Upload Resume Parquet file (for %Complete pie chart) ---
-resume_file = st.file_uploader("Upload resume Parquet file", type=["parquet"])
+# --- Load Resume Parquet file (for %Complete pie chart) ---
+resume_file = r"CF_resume.parquet"
 if resume_file is not None:
     resume_df = pd.read_parquet(resume_file)
     resume_df.columns = resume_df.columns.str.strip().str.lower()  # normalize columns
@@ -669,8 +671,6 @@ if resume_file is not None:
             filtered_df = filtered_df[(filtered_df['datetouse'] >= pd.Timestamp(start_date)) &
                                       (filtered_df['datetouse'] <= pd.Timestamp(end_date))]
             date_range_str = f"{start_date} to {end_date}"
-
-
         elif filter_type == "Unplanned":
             filtered_df = filtered_df[filtered_df['datetouse'].isna()]
             date_range_str = "Unplanned"
@@ -692,7 +692,7 @@ if resume_file is not None:
     formatted_variation = f"{variation_sum:,.2f}".replace(",", " ").replace(".", ",")
 
     # Money logo
-    money_logo_path = r"C:\Users\Xavier.Mascarenhas\OneDrive - Gaeltec Utilities Ltd\Desktop\Gaeltec\06_Programs\Dashboard\Images\Pound.png"
+    money_logo_path = r"Images/Pound.png"
     money_logo = Image.open(money_logo_path).resize((40, 40))
     buffered = BytesIO()
     money_logo.save(buffered, format="PNG")
@@ -791,7 +791,7 @@ if resume_file is not None:
     col_map, col_desc = st.columns([2, 1])
     with col_map:
         st.header("🗺️ Regional Map View")
-        folder_path = r"C:\Users\Xavier.Mascarenhas\OneDrive - Gaeltec Utilities Ltd\Desktop\Gaeltec\06_Programs\Dashboard\Maps"
+        folder_path = r"Maps"
         file_list = glob.glob(os.path.join(folder_path, "*.json"))
 
         if not file_list:
@@ -886,24 +886,24 @@ if resume_file is not None:
         else:
             st.info("Project or Segment Code columns not found in the data.")
 
-    # -------------------------------
-    # --- Mapping Bar Charts + Drill-down + Excel Export ---
-    # -------------------------------
+# -------------------------------
+# --- Mapping Bar Charts + Drill-down + Excel Export ---
+# -------------------------------
     st.header("📊 Mapping Charts")
     convert_to_miles = st.checkbox("Convert Equipment/Conductor Length to Miles")
 
     categories = [
-        ("Poles", pole_keys, "Quantity"),
-        ("Transformers", transformer_keys, "Quantity"),
+        ("Poles 🪵", pole_keys, "Quantity"),
+        ("Transformers ⚡🏭", transformer_keys, "Quantity"),
         ("Conductors", conductor_keys, "Length (Km)"),
         ("Conductors_2", conductor_2_keys, "Length (Km)"),
         ("Equipment", equipment_keys, "Quantity"),
         ("Insulators", insulator_keys, "Quantity"),
         ("LV Joints (Kits)", lv_joint_kit_keys, "Quantity"),
         ("LV Joint Modules", lv_joint_module_keys, "Quantity"),
-        ("HV Joints / Terminations", hv_joint_termination_keys, "Quantity"),
-        ("Cable Accessories", cable_accessory_keys, "Quantity"),
-        ("Foundation & Steelwork", foundation_steelwork_keys, "Quantity")
+        ("HV Joints / Terminations ⚡", hv_joint_termination_keys, "Quantity"),
+        ("Cable Accessories 🔌", cable_accessory_keys, "Quantity"),
+        ("Foundation & Steelwork 🏗️", foundation_steelwork_keys, "Quantity")
     ]
 
     def sanitize_sheet_name(name: str) -> str:
@@ -914,8 +914,6 @@ if resume_file is not None:
 
 
     for cat_name, keys, y_label in categories:
-
-        st.subheader(f"🔹 {cat_name}")
 
         # Only process if columns exist
         if 'item' not in filtered_df.columns or 'mapped' not in filtered_df.columns:
@@ -960,64 +958,128 @@ if resume_file is not None:
         # Update Streamlit subheader with total
         st.subheader(f"🔹 {cat_name} — Total: {grand_total:,.2f}")
 
-
         # Draw the bar chart
-        fig = px.bar(
-            bar_data,
-            x='Mapped',
-            y='Total',
-            color='Total',
-            text='Total',
-            title=f"{cat_name} Overview",
-            color_continuous_scale=['rgba(128,0,128,1)','rgba(147,112,219,1)',
-                                    'rgba(186,85,211,1)','rgba(221,160,221,1)'],
-            labels={'Mapped': 'Mapping', 'Total': y_axis_label}
-        )
-    
+        # FIX: Use go.Figure with explicit data types
+        fig = go.Figure(data=[
+            go.Bar(
+                x=bar_data['Mapped'].astype(str).tolist(),
+                y=bar_data['Total'].astype(float).tolist(),
+                text=bar_data['Total'].astype(float).tolist(),
+                texttemplate='%{y:,.1f}',
+                textposition='outside'
+            )
+        ])
+
         fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,1)',
-            paper_bgcolor='rgba(0,0,0,1)',
-            font=dict(color='white'),
-            coloraxis_showscale=False
+            title=f"{cat_name} Overview",
+            xaxis_title="Mapping",
+            yaxis_title=y_axis_label
         )
-    
-        # 🔥 Correctly indented clickable chart
-        click = plotly_events(
-            fig,
-            click_event=True,
-            override_height=500,
-            override_width="100%"
+        
+        # Add background colors separately
+        fig.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            yaxis=dict(
+                gridcolor='rgba(255,255,255,0.3)'  # Semi-transparent white grid
+            )
         )
 
-    
-        # Drill-down when clicking
-        if click:
-            clicked_mapping = click[0]["x"]
-    
-            st.subheader(f"Details for: **{clicked_mapping}**")
-            selected_rows = sub_df[sub_df['mapped'] == clicked_mapping].copy()
+        # Display the chart
+        st.plotly_chart(fig, use_container_width=True, height=500)
+
+        # COLLAPSIBLE BUTTONS SECTION
+        with st.expander("🔍 Click to explore more information", expanded=False):
+            st.subheader("Select Mapping to Drill-down:")
+            
+            # Option 1: Buttons in columns
+            cols = st.columns(3)  # 3 buttons per row
+            
+            for idx, mapping_value in enumerate(bar_data['Mapped']):
+                col_idx = idx % 3  # Which column to use (0, 1, or 2)
+                
+                with cols[col_idx]:
+                    button_key = f"btn_{cat_name}_{mapping_value}_{idx}"
+                    
+                    if st.button(f"📊 {mapping_value}", key=button_key, use_container_width=True):
+                        st.session_state[f"selected_{cat_name}"] = mapping_value
+                        st.rerun()  # Refresh to show the details immediately
+
+        # Check if a mapping was selected
+        selected_mapping = st.session_state.get(f"selected_{cat_name}")
+        
+        if selected_mapping:
+            st.subheader(f"Details for: **{selected_mapping}**")
+            
+            # Add a button to clear the selection
+            if st.button("❌ Clear Selection", key=f"clear_{cat_name}"):
+                del st.session_state[f"selected_{cat_name}"]
+                st.rerun()
+            
+            selected_rows = sub_df[sub_df['mapped'] == selected_mapping].copy()
             selected_rows = selected_rows.loc[:, ~selected_rows.columns.duplicated()]
-    
 
             if 'datetouse' in selected_rows.columns:
-                # Create display column
                 selected_rows['datetouse_display'] = pd.to_datetime(
                     selected_rows['datetouse'], errors='coerce'
                 ).dt.strftime("%d/%m/%Y")
-                # Mark empty dates as "Unplanned"
                 selected_rows.loc[selected_rows['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
 
-            
-            extra_cols = ['pole','poling team','team_name', 'projectmanager', 'project', 'shire', 'segmentdesc', 'sourcefile']
-            selected_rows = selected_rows.rename(columns={"poling team": "code"})
-            selected_rows = selected_rows.rename(columns={"team_name": "team lider"})
+
+            # Your original approach but working:
+            extra_cols = ['pole','qsub','poling team','team_name', 'projectmanager', 'project', 'shire', 'segmentdesc', 'sourcefile']
+
+            # Rename first
+            selected_rows = selected_rows.rename(columns={
+                "poling team": "code", 
+                "team_name": "team lider"
+            })
+
+            # Update the extra_cols list to use new names
             extra_cols = [c if c != "poling team" else "code" for c in extra_cols]
             extra_cols = [c if c != "team_name" else "team lider" for c in extra_cols]
+
+            # Filter to only existing columns
+            extra_cols = [c for c in extra_cols if c in selected_rows.columns]
+
+            # Create display date
+            if 'datetouse' in selected_rows.columns:
+                selected_rows['datetouse_display'] = pd.to_datetime(
+                    selected_rows['datetouse'], errors='coerce'
+                ).dt.strftime("%d/%m/%Y")
+                selected_rows.loc[selected_rows['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
+
             display_cols = ['mapped', 'datetouse_display'] + extra_cols
             display_cols = [c for c in display_cols if c in selected_rows.columns]
+
+            if not selected_rows.empty:
+                st.dataframe(selected_rows[display_cols], use_container_width=True)
+                st.write(f"**Total records:** {len(selected_rows)}")
     
-            st.dataframe(selected_rows[display_cols], use_container_width=True)
-    
+                if 'qsub_clean' in selected_rows.columns:
+                    total_qsub = selected_rows['qsub_clean'].sum()
+                    st.write(f"Total QSUB: {total_qsub:,.2f}")
+            else:
+                st.info("No records found for this selection")
+
+            #extra_cols = ['pole','qsub','poling team','team_name', 'projectmanager', 'project', 'shire', 'segmentdesc', 'sourcefile']
+            #selected_rows = selected_rows.rename(columns={"poling team": "code"})
+            #selected_rows = selected_rows.rename(columns={"team_name": "team lider"})
+            #extra_cols = [c if c != "poling team" else "code" for c in extra_cols]
+            #extra_cols = [c if c != "team_name" else "team lider" for c in extra_cols]
+            #display_cols = ['mapped', 'datetouse_display'] + extra_cols
+            #display_cols = [c for c in display_cols if c in selected_rows.columns]
+
+            if not selected_rows.empty:
+                st.dataframe(selected_rows[display_cols], use_container_width=True)
+                st.write(f"**Total records:** {len(selected_rows)}")
+                
+                if 'qsub_clean' in selected_rows.columns:
+                    total_qsub = selected_rows['qsub_clean'].sum()
+                    st.write(f"Total QSUB: {total_qsub:,.2f}")
+            else:
+                st.info("No records found for this selection")
+                
             # Excel Export
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
