@@ -1028,7 +1028,7 @@ if resume_file is not None:
 
 
             # Your original approach but working:
-            extra_cols = ['pole','qsub','poling team','team_name', 'projectmanager', 'project', 'shire', 'segmentdesc', 'sourcefile']
+            extra_cols = ['pole','qsub','poling team','team_name', 'projectmanager', 'project', 'shire', 'segmentdesc','segmentcode', 'sourcefile']
 
             # Rename first
             selected_rows = selected_rows.rename(columns={
