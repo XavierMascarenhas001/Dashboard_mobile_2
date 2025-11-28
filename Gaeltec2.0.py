@@ -31,6 +31,71 @@ def sanitize_sheet_name(name: str) -> str:
     name = re.sub(r'[^\x00-\x7F]', '_', name)
     return name[:31]
 
+def get_scottish_weather(api_key, location="Ayrshire"):
+    """
+    Get weather data for Scottish locations
+    """
+    # Coordinates for Scottish locations
+    locations = {
+        "Ayrshire": {"lat": 55.458, "lon": -4.629},
+        "Lanarkshire": {"lat": 55.676, "lon": -3.785},
+        "Glasgow": {"lat": 55.864, "lon": -4.252},
+        "Edinburgh": {"lat": 55.953, "lon": -3.188}
+    }
+    
+    if location in locations:
+        coords = locations[location]
+    else:
+        # Default to Ayrshire
+        coords = locations["Ayrshire"]
+    
+    base_url = "http://api.openweathermap.org/data/2.5/weather"
+    params = {
+        'lat': coords["lat"],
+        'lon': coords["lon"],
+        'appid': api_key,
+        'units': 'metric'
+    }
+    
+    try:
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching weather data: {e}")
+        return None
+
+@cache_data(ttl=1800)  # Cache for 30 minutes
+def get_weather_forecast(api_key, location="Ayrshire"):
+    """
+    Get 5-day forecast for Scottish locations
+    """
+    locations = {
+        "Ayrshire": {"lat": 55.458, "lon": -4.629},
+        "Lanarkshire": {"lat": 55.676, "lon": -3.785}
+    }
+    
+    if location in locations:
+        coords = locations[location]
+    else:
+        coords = locations["Ayrshire"]
+    
+    base_url = "http://api.openweathermap.org/data/2.5/forecast"
+    params = {
+        'lat': coords["lat"],
+        'lon': coords["lon"],
+        'appid': api_key,
+        'units': 'metric'
+    }
+    
+    try:
+        response = requests.get(base_url, params=params)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Forecast API error: {e}")
+        return None
+
 # --- MAPPINGS ---
 
 # --- Project Manager Mapping ---
@@ -1016,7 +1081,61 @@ if resume_file is not None:
 
 
     with col_desc:
-        st.markdown("<h3 style='color:white;'>Weather </h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='color:white;'>Weather</h3>", unsafe_allow_html=True)
+        
+        # --- Scottish Weather Widget ---
+        try:
+            # Get API key from secrets
+            api_key = st.secrets.get("WEATHER_API_KEY")
+            
+            if not api_key:
+                st.info("Weather API key not configured")
+            else:
+                # Location selector
+                location = st.selectbox(
+                    "Select Location",
+                    ["Ayrshire", "Lanarkshire", "Glasgow", "Edinburgh"],
+                    index=0,
+                    key="weather_location"
+                )
+                
+                if st.button("Refresh Weather", key="refresh_weather"):
+                    st.rerun()
+                
+                # Get current weather
+                weather_data = get_scottish_weather(api_key, location)
+                
+                if weather_data:
+                    # Display weather information
+                    temp = weather_data['main']['temp']
+                    feels_like = weather_data['main']['feels_like']
+                    humidity = weather_data['main']['humidity']
+                    wind_speed = weather_data['wind']['speed']
+                    description = weather_data['weather'][0]['description'].title()
+                    icon_code = weather_data['weather'][0]['icon']
+                    
+                    # Weather icon and description
+                    col_icon, col_desc = st.columns([1, 2])
+                    with col_icon:
+                        st.image(f"http://openweathermap.org/img/wn/{icon_code}@2x.png", width=50)
+                    with col_desc:
+                        st.write(f"**{description}**")
+                    
+                    # Weather metrics
+                    st.metric("Temperature", f"{temp}°C", f"Feels like {feels_like}°C")
+                    st.metric("Humidity", f"{humidity}%")
+                    st.metric("Wind Speed", f"{wind_speed} m/s")
+                    
+                    # Construction impact assessment
+                    st.markdown("---")
+                    st.markdown("**Construction Impact:**")
+                    impact = assess_construction_impact(weather_data)
+                    st.write(impact)
+                else:
+                    st.error("Failed to fetch weather data")
+                    
+        except Exception as e:
+            st.warning(f"Could not load weather information: {e}")
 
 
 # -------------------------------
