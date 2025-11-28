@@ -720,65 +720,59 @@ if resume_file is not None:
             unsafe_allow_html=True
         )
 
-    with col_top_right:
-        st.markdown("<h3 style='text-align:center; color:white;'>Works Complete </h3>", unsafe_allow_html=True)
-        # --- Top-right Chart: Projects Distribution Over Time ---
-        try:
-            # Use the filtered_df that has been through all the sidebar filters
-            if 'filtered_df' in locals() and not filtered_df.empty:
-                
-                # Prepare data for the chart - exclude blanks and dates before 2000
-                chart_df = filtered_df[filtered_df['datetouse_dt'].notna()].copy()
-                chart_df = chart_df[chart_df['datetouse_dt'] >= '2000-01-01']
-                
-                if not chart_df.empty:
-                    # Group by date and count projects
-                    date_counts = chart_df.groupby('datetouse_dt').size().reset_index(name='total')
-                    date_counts = date_counts.sort_values('datetouse_dt')
+        with col_top_right:
+            st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
+            # --- Top-right Chart: Revenue Over Time ---
+            try:
+                # Use the filtered_df that has been through all the sidebar filters
+                if 'filtered_df' in locals() and not filtered_df.empty and 'total' in filtered_df.columns:
                     
-                    # Create the line chart
-                    fig_timeline = px.line(
-                        date_counts, 
-                        x='datetouse_dt', 
-                        y='total',
-                        title="Daily Return",
-                        labels={'datetouse_dt': 'Date', 'total': 'Daily Total'}
-                    )
-                    fig_timeline.update_traces(
-                        mode='lines+markers',
-                        line=dict(width=3),
-                        marker=dict(size=6)
-                    )
-                    fig_timeline.update_layout(
-                        xaxis=dict(
-                            tickformat="%Y-%m-%d",
-                            tickangle=45
-                        ),
-                        yaxis=dict(title='Number of Projects'),
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='white'),
-                        title_font_size=16
-                    )
+                    # Prepare data for the chart - exclude blanks and dates before 2000
+                    chart_df = filtered_df[filtered_df['datetouse_dt'].notna()].copy()
+                    chart_df = chart_df[chart_df['datetouse_dt'] >= '2000-01-01']
                     
-                    # Display in top-right column
-                    if 'col_top_right' in locals():
-                        col_top_right.plotly_chart(fig_timeline, use_container_width=True)
-                    else:
-                        st.plotly_chart(fig_timeline, use_container_width=True)
-                    
-                else:
-                    # Show info if no valid dates after filtering
-                    if 'col_top_right' in locals():
-                        col_top_right.info("No projects with dates since 2000 for selected filters.")
-                    else:
-                        st.info("No projects with dates since 2000 for selected filters.")
+                    if not chart_df.empty:
+                        # Group by date and SUM the total column (not count projects)
+                        revenue_by_date = chart_df.groupby('datetouse_dt')['total'].sum().reset_index()
+                        revenue_by_date = revenue_by_date.sort_values('datetouse_dt')
                         
-            else:
-                st.info("No data available for the selected filters.")
+                        # Create the line chart
+                        fig_revenue = px.line(
+                            revenue_by_date, 
+                            x='datetouse_dt', 
+                            y='total',
+                            title="Daily Revenue",
+                            labels={'datetouse_dt': 'Date', 'total': 'Revenue'}
+                        )
+                        fig_revenue.update_traces(
+                            mode='lines+markers',
+                            line=dict(width=3),
+                            marker=dict(size=6)
+                        )
+                        fig_revenue.update_layout(
+                            xaxis=dict(
+                                tickformat="%Y-%m-%d",
+                                tickangle=45
+                            ),
+                            yaxis=dict(title='Revenue'),
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='white'),
+                            title_font_size=16
+                        )
+                        
+                        # Display in top-right column
+                        st.plotly_chart(fig_revenue, use_container_width=True)
+                        
+                    else:
+                        # Show info if no valid dates after filtering
+                        st.info("No projects with dates since 2000 for selected filters.")
+                            
+                else:
+                    st.info("No data available for the selected filters.")
 
-        except Exception as e:
-            st.warning(f"Could not generate projects timeline chart: {e}")
+            except Exception as e:
+                st.warning(f"Could not generate revenue chart: {e}")
 
 
     # Display Total & Variation
