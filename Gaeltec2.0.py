@@ -1062,24 +1062,6 @@ if resume_file is not None:
                     st.write(f"Total QSUB: {total_qsub:,.2f}")
             else:
                 st.info("No records found for this selection")
-
-            #extra_cols = ['pole','qsub','poling team','team_name', 'projectmanager', 'project', 'shire', 'segmentdesc', 'sourcefile']
-            #selected_rows = selected_rows.rename(columns={"poling team": "code"})
-            #selected_rows = selected_rows.rename(columns={"team_name": "team lider"})
-            #extra_cols = [c if c != "poling team" else "code" for c in extra_cols]
-            #extra_cols = [c if c != "team_name" else "team lider" for c in extra_cols]
-            #display_cols = ['mapped', 'datetouse_display'] + extra_cols
-            #display_cols = [c for c in display_cols if c in selected_rows.columns]
-
-            if not selected_rows.empty:
-                st.dataframe(selected_rows[display_cols], use_container_width=True)
-                st.write(f"**Total records:** {len(selected_rows)}")
-                
-                if 'qsub_clean' in selected_rows.columns:
-                    total_qsub = selected_rows['qsub_clean'].sum()
-                    st.write(f"Total QSUB: {total_qsub:,.2f}")
-            else:
-                st.info("No records found for this selection")
                 
             # Excel Export
             buffer = BytesIO()
