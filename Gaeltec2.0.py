@@ -840,7 +840,6 @@ if resume_file is not None:
 
         except Exception as e:
             st.warning(f"Could not generate projects timeline chart: {e}")
-
     # -------------------------------
     # --- Map Section ---
     # -------------------------------
