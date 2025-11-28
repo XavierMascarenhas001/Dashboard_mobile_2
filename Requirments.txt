@@ -1,13 +1,11 @@
 # dashboard_mapped.py
 streamlit
 pandas
-plotly.express
-re
+plotly
 geopandas
 pydeck
-os
-glob
-PIL
-io
-base64
-fstreamlit_plotly_events
+Pillow
+streamlit-plotly-events
+pyarrow
+openpyxl
+matplotlib
