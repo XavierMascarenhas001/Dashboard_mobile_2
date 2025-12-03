@@ -822,7 +822,7 @@ if resume_file is not None:
                     hovertemplate='<b>Date: %{x}</b><br>Revenue: €%{y:,.0f}<extra></extra>'
                 )
                 fig_revenue.update_layout(
-                    height=600,  # Taller chart
+                    height=600,  # taller chart
                     xaxis=dict(
                         tickformatstops=[
                             dict(dtickrange=[None, 1000*60*60*24*30], value="%d %b %Y"),
@@ -834,10 +834,11 @@ if resume_file is not None:
                         type='date'
                     ),
                     yaxis=dict(
-                        title='Revenue (£)',
+                        title='Revenue (€)',
                         tickformat=",.0f",
                         gridcolor='rgba(128,128,128,0.2)',
-                        autorange=True  # <-- ensures Y axis adjusts when zooming
+                        autorange=True,
+                        fixedrange=False  # <-- allow dynamic scaling on zoom
                     ),
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
