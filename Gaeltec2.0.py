@@ -942,62 +942,55 @@ if resume_file is not None:
         
             
             # --- Pie Chart: % Complete ---
+# -------------------------------
+    # --- Works Complete Pie Chart ---
+    # -------------------------------
     st.markdown("<h3 style='text-align:center; color:white;'>Works Complete</h3>", unsafe_allow_html=True)
     try:
-            # Ensure resume_df exists
-            if 'resume_df' in locals():
+        if 'resume_df' in locals():
+            filtered_segments = filtered_df['segment'].dropna().astype(str).str.strip().str.lower().unique()
+            resume_df['section'] = resume_df['section'].dropna().astype(str).str.strip().str.lower()
 
-                # Normalize both columns to lowercase strings without extra spaces
-                filtered_segments = filtered_df['segment'].dropna().astype(str).str.strip().str.lower().unique()
-                resume_df['section'] = resume_df['section'].dropna().astype(str).str.strip().str.lower()
+            if {'section', '%complete'}.issubset(resume_df.columns):
+                resume_filtered = resume_df[resume_df['section'].isin(filtered_segments)]
 
-                # Check if necessary columns exist in resume_df
-                if {'section', '%complete'}.issubset(resume_df.columns):
+                if not resume_filtered.empty:
+                    avg_complete = resume_filtered['%complete'].mean()
+                    avg_complete = min(max(avg_complete, 0), 100)
 
-                    # Filter resume to only include relevant sections
-                    resume_filtered = resume_df[resume_df['section'].isin(filtered_segments)]
+                    pie_data = pd.DataFrame({
+                        'Status': ['Completed', 'Done or Remaining'],
+                        'Value': [avg_complete, 100 - avg_complete]
+                    })
 
-                    if not resume_filtered.empty:
-                        avg_complete = resume_filtered['%complete'].mean()
-                        avg_complete = min(max(avg_complete, 0), 100)  # clamp 0-100
+                    fig_pie = px.pie(
+                        pie_data,
+                        names='Status',
+                        values='Value',
+                        color='Status',
+                        color_discrete_map={'Completed': 'green', 'Done or Remaining': 'red'},
+                        hole=0.6
+                    )
+                    fig_pie.update_traces(
+                        textinfo='percent+label',
+                        textfont_size=20
+                    )
+                    fig_pie.update_layout(
+                        title_text="",
+                        title_font_size=20,
+                        font=dict(color='white'),
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        showlegend=True,
+                        legend=dict(font=dict(color='white'))
+                    )
 
-                        # Pie chart data
-                        pie_data = pd.DataFrame({
-                            'Status': ['Completed', 'Done or Remaining'],
-                            'Value': [avg_complete, 100 - avg_complete]
-                        })
-
-                        # Plot pie chart
-                        fig_pie = px.pie(
-                            pie_data,
-                            names='Status',
-                            values='Value',
-                            color='Status',
-                            color_discrete_map={'Completed': 'green', 'Done or Remaining': 'red'},
-                            hole=0.6
-                        )
-                        fig_pie.update_traces(
-                            textinfo='percent+label',
-                            textfont_size=20
-                        )
-                        fig_pie.update_layout(
-                            title_text="",
-                            title_font_size=20,
-                            font=dict(color='white'),
-                            paper_bgcolor='rgba(0,0,0,0)',
-                            plot_bgcolor='rgba(0,0,0,0)',
-                            showlegend=True,
-                            legend=dict(font=dict(color='white'))
-                        )
-
-                        # Display pie chart
-                        st.plotly_chart(fig_pie, use_container_width=True)
-
-                    else:
-                        st.info("No matching sections found for the selected filters to generate % completion chart.")
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.info("No matching sections found for the selected filters to generate % completion chart.")
 
     except Exception as e:
-            st.warning(f"Could not generate % Complete pie chart: {e}")
+        st.warning(f"Could not generate % Complete pie chart: {e}")
         
     # -------------------------------
     # --- Map Section ---
