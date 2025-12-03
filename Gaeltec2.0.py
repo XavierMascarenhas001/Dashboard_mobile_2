@@ -681,6 +681,16 @@ if resume_file is not None:
     resume_df = pd.read_parquet(resume_file)
     resume_df.columns = resume_df.columns.str.strip().str.lower()  # normalize columns
 
+# --- Load Miscellaneous Parquet file ---
+misc_file = r"CF_miscellaneous.parquet"
+if misc_file is not None:
+    try:
+        misc_df = pd.read_parquet(misc_file)
+        misc_df.columns = misc_df.columns.str.strip().str.lower()  # normalize columns
+        st.success("Miscellaneous data loaded successfully.")
+    except Exception as e:
+        st.warning(f"Could not load Miscellaneous parquet: {e}")
+
     # -------------------------------
     # --- Sidebar Filters ---
     # -------------------------------
