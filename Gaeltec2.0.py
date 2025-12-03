@@ -940,71 +940,65 @@ if resume_file is not None:
             else:
                 st.info("Project or Segment Code columns not found in the data.")
         
-        with col_top_right:
-            st.markdown(
-                "<div style='display:flex; justify-content:center;'><h3 style='color:white;'>Works Complete</h3></div>",
-                unsafe_allow_html=True
-            )
             
             # --- Pie Chart: % Complete ---
-            # --- Pie Chart: % Complete ---
-            st.markdown("<h3 style='text-align:center; color:white;'>Works Complete</h3>", unsafe_allow_html=True)
-            try:
-                    # Ensure resume_df exists
-                    if 'resume_df' in locals():
+    st.markdown("<h3 style='text-align:center; color:white;'>Works Complete</h3>", unsafe_allow_html=True)
+    try:
+            # Ensure resume_df exists
+            if 'resume_df' in locals():
 
-                        # Normalize both columns to lowercase strings without extra spaces
-                        filtered_segments = filtered_df['segment'].dropna().astype(str).str.strip().str.lower().unique()
-                        resume_df['section'] = resume_df['section'].dropna().astype(str).str.strip().str.lower()
+                # Normalize both columns to lowercase strings without extra spaces
+                filtered_segments = filtered_df['segment'].dropna().astype(str).str.strip().str.lower().unique()
+                resume_df['section'] = resume_df['section'].dropna().astype(str).str.strip().str.lower()
 
-                        # Check if necessary columns exist in resume_df
-                        if {'section', '%complete'}.issubset(resume_df.columns):
+                # Check if necessary columns exist in resume_df
+                if {'section', '%complete'}.issubset(resume_df.columns):
 
-                            # Filter resume to only include relevant sections
-                            resume_filtered = resume_df[resume_df['section'].isin(filtered_segments)]
+                    # Filter resume to only include relevant sections
+                    resume_filtered = resume_df[resume_df['section'].isin(filtered_segments)]
 
-                            if not resume_filtered.empty:
-                                avg_complete = resume_filtered['%complete'].mean()
-                                avg_complete = min(max(avg_complete, 0), 100)  # clamp 0-100
+                    if not resume_filtered.empty:
+                        avg_complete = resume_filtered['%complete'].mean()
+                        avg_complete = min(max(avg_complete, 0), 100)  # clamp 0-100
 
-                                # Pie chart data
-                                pie_data = pd.DataFrame({
-                                    'Status': ['Completed', 'Done or Remaining'],
-                                    'Value': [avg_complete, 100 - avg_complete]
-                                })
+                        # Pie chart data
+                        pie_data = pd.DataFrame({
+                            'Status': ['Completed', 'Done or Remaining'],
+                            'Value': [avg_complete, 100 - avg_complete]
+                        })
 
-                                # Plot pie chart
-                                fig_pie = px.pie(
-                                    pie_data,
-                                    names='Status',
-                                    values='Value',
-                                    color='Status',
-                                    color_discrete_map={'Completed': 'green', 'Done or Remaining': 'red'},
-                                    hole=0.6
-                                )
-                                fig_pie.update_traces(
-                                    textinfo='percent+label',
-                                    textfont_size=20
-                                )
-                                fig_pie.update_layout(
-                                    title_text="",
-                                    title_font_size=20,
-                                    font=dict(color='white'),
-                                    paper_bgcolor='rgba(0,0,0,0)',
-                                    plot_bgcolor='rgba(0,0,0,0)',
-                                    showlegend=True,
-                                    legend=dict(font=dict(color='white'))
-                                )
+                        # Plot pie chart
+                        fig_pie = px.pie(
+                            pie_data,
+                            names='Status',
+                            values='Value',
+                            color='Status',
+                            color_discrete_map={'Completed': 'green', 'Done or Remaining': 'red'},
+                            hole=0.6
+                        )
+                        fig_pie.update_traces(
+                            textinfo='percent+label',
+                            textfont_size=20
+                        )
+                        fig_pie.update_layout(
+                            title_text="",
+                            title_font_size=20,
+                            font=dict(color='white'),
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            showlegend=True,
+                            legend=dict(font=dict(color='white'))
+                        )
 
-                                # Display pie chart
-                                st.plotly_chart(fig_pie, use_container_width=True)
+                        # Display pie chart
+                        st.plotly_chart(fig_pie, use_container_width=True)
 
-                            else:
-                                st.info("No matching sections found for the selected filters to generate % completion chart.")
+                    else:
+                        st.info("No matching sections found for the selected filters to generate % completion chart.")
 
-            except Exception as e:
-                    st.warning(f"Could not generate % Complete pie chart: {e}")
-
+    except Exception as e:
+            st.warning(f"Could not generate % Complete pie chart: {e}")
+        
     # -------------------------------
     # --- Map Section ---
     # -------------------------------
