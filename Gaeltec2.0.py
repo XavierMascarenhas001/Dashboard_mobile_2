@@ -766,8 +766,8 @@ if resume_file is not None:
     money_logo_base64 = base64.b64encode(buffered.getvalue()).decode()
 
     # Display Total & Variation (Centered)
-    col_top_left, col_top_right = st.columns([1, 1])
-    with col_top_left:
+    st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
+    try:
         st.markdown(
             f"""
             <div style='display:flex; justify-content:center;'>
@@ -941,7 +941,11 @@ if resume_file is not None:
                 st.info("Project or Segment Code columns not found in the data.")
         
         with col_top_right:
-            st.markdown("<h3 style='text-align:center; color:white;'>Works Complete</h3>", unsafe_allow_html=True)
+            st.markdown(
+                "<div style='display:flex; justify-content:center;'><h3 style='color:white;'>Works Complete</h3></div>",
+                unsafe_allow_html=True
+            )
+            
             # --- Pie Chart: % Complete ---
             try:
                 # Ensure resume_df exists
