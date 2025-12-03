@@ -1317,9 +1317,10 @@ if resume_file is not None:
             else:
                 st.info("No records found for this selection")
                 
-            # Excel Export
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            # Excel Export - Aggregated
+            buffer_agg = BytesIO()
+            with pd.ExcelWriter(buffer_agg, engine='openpyxl') as writer:
+                aggregated_df = pd.DataFrame()
                 for bar_value in bar_data['Mapped']:
                     df_bar = sub_df[sub_df['mapped'] == bar_value].copy()
                     df_bar = df_bar.loc[:, ~df_bar.columns.duplicated()]
@@ -1332,14 +1333,42 @@ if resume_file is not None:
                     cols_to_include = ['mapped', 'datetouse_display'] + extra_cols
                     cols_to_include = [c for c in cols_to_include if c in df_bar.columns]
                     df_bar = df_bar[cols_to_include]
-    
+
+                    aggregated_df = pd.concat([aggregated_df, df_bar], ignore_index=True)
+
+                aggregated_df.to_excel(writer, sheet_name='Aggregated', index=False)
+
+            buffer_agg.seek(0)
+            st.download_button(
+                f"📥 Download Excel (Aggregated): {cat_name} Details",
+                buffer_agg,
+                file_name=f"{cat_name}_Details_Aggregated.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            # Excel Export - Separate Sheets
+            buffer_sep = BytesIO()
+            with pd.ExcelWriter(buffer_sep, engine='openpyxl') as writer:
+                for bar_value in bar_data['Mapped']:
+                    df_bar = sub_df[sub_df['mapped'] == bar_value].copy()
+                    df_bar = df_bar.loc[:, ~df_bar.columns.duplicated()]
+                    if 'datetouse' in df_bar.columns:
+                        df_bar['datetouse_display'] = pd.to_datetime(
+                            df_bar['datetouse'], errors='coerce'
+                        ).dt.strftime("%d/%m/%Y")
+                        df_bar.loc[df_bar['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
+
+                    cols_to_include = ['mapped', 'datetouse_display'] + extra_cols
+                    cols_to_include = [c for c in cols_to_include if c in df_bar.columns]
+                    df_bar = df_bar[cols_to_include]
+
                     sheet_name = sanitize_sheet_name(bar_value)
                     df_bar.to_excel(writer, sheet_name=sheet_name, index=False)
-    
-            buffer.seek(0)
+
+            buffer_sep.seek(0)
             st.download_button(
-                f"📥 Download Excel: {cat_name} Details",
-                buffer,
-                file_name=f"{cat_name}_Details.xlsx",
+                f"📥 Download Excel (Separated): {cat_name} Details",
+                buffer_sep,
+                file_name=f"{cat_name}_Details_Separated.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
