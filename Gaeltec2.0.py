@@ -765,104 +765,29 @@ if resume_file is not None:
     money_logo.save(buffered, format="PNG")
     money_logo_base64 = base64.b64encode(buffered.getvalue()).decode()
 
-    # Display Total & Variation
+    # Display Total & Variation (Centered)
     col_top_left, col_top_right = st.columns([1, 1])
     with col_top_left:
         st.markdown(
             f"""
-            <div style='display:flex; flex-direction:column; gap:4px;'>
-                <div style='display:flex; align-items:center; gap:10px;'>
-                    <h2 style='color:#32CD32; margin:0; font-size:36px;'><b>Total:</b> {formatted_total}</h2>
-                    <img src='data:image/png;base64,{money_logo_base64}' width='40' height='40'/>
+            <div style='display:flex; justify-content:center;'>
+                <div style='display:flex; flex-direction:column; gap:4px;'>
+                    <div style='display:flex; align-items:center; gap:10px;'>
+                        <h2 style='color:#32CD32; margin:0; font-size:36px;'><b>Total:</b> {formatted_total}</h2>
+                        <img src='data:image/png;base64,{money_logo_base64}' width='40' height='40'/>
+                    </div>
+                    <div style='display:flex; align-items:center; gap:8px;'>
+                        <h2 style='color:#32CD32; font-size:25px; margin:0;'><b>Variation:</b> {formatted_variation}</h2>
+                        <img src='data:image/png;base64,{money_logo_base64}' width='28' height='28'/>
+                    </div>
+                    <p style='text-align:center; font-size:14px; margin-top:4px;'>
+                        ({date_range_str}, Shires: {selected_shire}, Projects: {selected_project}, PMs: {selected_pm})
+                    </p>
                 </div>
-                <div style='display:flex; align-items:center; gap:8px;'>
-                    <h2 style='color:#32CD32; font-size:25px; margin:0;'><b>Variation:</b> {formatted_variation}</h2>
-                    <img src='data:image/png;base64,{money_logo_base64}' width='28' height='28'/>
-                </div>
-                <p style='text-align:left; font-size:14px; margin-top:4px;'>
-                    ({date_range_str}, Shires: {selected_shire}, Projects: {selected_project}, PMs: {selected_pm})
-                </p>
             </div>
             """,
             unsafe_allow_html=True
         )
-
-        with col_top_right:
-            st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
-            # --- Top-right Chart: Revenue Over Time ---
-            try:
-                # Use the filtered_df that has been through all the sidebar filters
-                if 'filtered_df' in locals() and not filtered_df.empty and 'total' in filtered_df.columns:
-                    
-                    # Prepare data for the chart - exclude blanks and dates before 2000
-                    chart_df = filtered_df[filtered_df['datetouse_dt'].notna()].copy()
-                    chart_df = chart_df[chart_df['datetouse_dt'] >= '2000-01-01']
-                    
-                    # Convert total column to numeric, handling errors
-                    chart_df['total'] = pd.to_numeric(chart_df['total'], errors='coerce')
-                    
-                    # Remove any rows where total conversion failed
-                    chart_df = chart_df[chart_df['total'].notna()]
-                    
-                    if not chart_df.empty:
-                        # Group by date and SUM the total column (not count projects)
-                        revenue_by_date = chart_df.groupby('datetouse_dt')['total'].sum().reset_index()
-                        revenue_by_date = revenue_by_date.sort_values('datetouse_dt')
-                        
-                        # Format the revenue numbers for better readability
-                        revenue_by_date['total_formatted'] = revenue_by_date['total'].apply(
-                            lambda x: f"€{x:,.0f}" if x >= 1000 else f"€{x:.0f}"
-                        )
-                        
-                        # Create the line chart
-                        fig_revenue = px.line(
-                            revenue_by_date, 
-                            x='datetouse_dt', 
-                            y='total',
-                            title="Daily Revenue",
-                            labels={'datetouse_dt': 'Date', 'total': 'Revenue (€)'}
-                        )
-                        fig_revenue.update_traces(
-                            mode='lines+markers',
-                            line=dict(width=3, color='#32CD32'),
-                            marker=dict(size=6, color='#32CD32'),
-                            hovertemplate='<b>Date: %{x}</b><br>Revenue: €%{y:,.0f}<extra></extra>'
-                        )
-                        fig_revenue.update_layout(
-                            xaxis=dict(
-                                tickformatstops=[
-                                    dict(dtickrange=[None, 1000*60*60*24*30], value="%d %b %Y"),  # zoomed in: show days
-                                    dict(dtickrange=[1000*60*60*24*30, None], value="%b %Y")        # zoomed out: show months
-                                ],
-                                tickangle=45,
-                                gridcolor='rgba(128,128,128,0.2)',
-                                rangeslider=dict(visible=True),  # optional range slider
-                                type='date'
-                            ),
-                            yaxis=dict(
-                                title='Revenue (€)',
-                                tickformat=",.0f",
-                                gridcolor='rgba(128,128,128,0.2)'
-                            ),
-                            paper_bgcolor='rgba(0,0,0,0)',
-                            plot_bgcolor='rgba(0,0,0,0)',
-                            font=dict(color='white'),
-                            title_font_size=16,
-                            hovermode='x unified'
-                        )
-                        
-                        # Display in top-right column
-                        st.plotly_chart(fig_revenue, use_container_width=True)
-                        
-                    else:
-                        # Show info if no valid dates after filtering
-                        st.info("No projects with dates since 2000 for selected filters.")
-                            
-                else:
-                    st.info("No data available for the selected filters.")
-
-            except Exception as e:
-                st.warning(f"Could not generate revenue chart: {e}")
 
                 st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
             # --- Top-right Chart: Revenue Over Time (Full Width) ---
