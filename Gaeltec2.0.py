@@ -776,12 +776,10 @@ if misc_file is not None:
 # -------------------------------
 # --- Upload Planning / Scope Parquet ---
 # -------------------------------
-# -------------------------------
-# --- Upload Planning / Scope Parquet ---
-# -------------------------------
 pid_file = st.sidebar.file_uploader(
     "Upload Planning / Scope Parquet",
-    type=["parquet"]
+    type=["parquet"],
+    help="Contains project, shire, project description and material scope"
 )
 
 pid_df = None
@@ -797,33 +795,43 @@ if pid_file is not None:
 # -------------------------------
 # --- Merge Aggregated DF with Metadata ---
 # -------------------------------
-enriched_df = agg_view.copy()
+enriched_df = agg_view.copy()  # agg_view from your earlier loading of aggregated parquet
 
 if pid_df is not None:
-    # Normalize text columns
+    # Ensure merge columns exist
     for col in ["project", "shire"]:
-        enriched_df[col] = enriched_df[col].astype(str).str.strip().str.lower()
-        pid_df[col] = pid_df[col].astype(str).str.strip().str.lower()
+        if col in enriched_df.columns and col in pid_df.columns:
+            enriched_df[col] = enriched_df[col].astype(str).str.strip().str.lower()
+            pid_df[col] = pid_df[col].astype(str).str.strip().str.lower()
+        else:
+            st.warning(f"Column '{col}' missing for merging. Merge may fail.")
 
-    # Exact merge on project & shire
-    enriched_df = enriched_df.merge(
-        pid_df,
-        on=["project", "shire"],
-        how="left",
-        suffixes=("", "_meta")
-    )
+    try:
+        enriched_df = enriched_df.merge(
+            pid_df,
+            on=["project", "shire"],
+            how="left",
+            suffixes=("", "_meta")
+        )
+    except Exception as e:
+        st.warning(f"Merge failed: {e}")
 
-    # Optional fuzzy matching for project description
+    # Optional fuzzy matching
     allow_fuzzy = st.sidebar.checkbox(
         "Allow fuzzy matching between Segment and Project Description (≥70%)",
         value=True
     )
 
-    if allow_fuzzy and "project_description" in pid_df.columns and "segmentdesc" in enriched_df.columns:
-        project_desc_list = pid_df["project_description"].dropna().unique().tolist()
+    if allow_fuzzy and 'project_description' in pid_df.columns and 'segmentdesc' in enriched_df.columns:
+        from rapidfuzz import process, fuzz
+
+        pid_df['project_description'] = pid_df['project_description'].astype(str).fillna("")
+        enriched_df['segmentdesc'] = enriched_df['segmentdesc'].astype(str).fillna("")
+
+        project_desc_list = pid_df['project_description'].unique().tolist()
 
         def fuzzy_match_segment(segment_desc, project_desc_list):
-            if pd.isna(segment_desc):
+            if not segment_desc:
                 return None, 0
             match, score = process.extractOne(segment_desc, project_desc_list, scorer=fuzz.partial_ratio)
             return match, score
@@ -835,8 +843,6 @@ if pid_df is not None:
         )
         enriched_df["matched_project_description"] = fuzzy_results[0]
         enriched_df["match_score"] = fuzzy_results[1]
-
-        # Only keep matches ≥70%
         enriched_df.loc[enriched_df["match_score"] < 70, "matched_project_description"] = None
     else:
         enriched_df["matched_project_description"] = None
@@ -867,9 +873,9 @@ selected_pm, filtered_df = multi_select_filter('projectmanager', "Select Project
 selected_segment, filtered_df = multi_select_filter('segmentcode', "Select Segment Code", filtered_df)
 selected_type, filtered_df = multi_select_filter('type', "Select Type", filtered_df)
 
-# Optional: Show Fuzzy Matches
+# Optional: Show fuzzy matches info
 if pid_df is not None and allow_fuzzy:
-    num_matches = filtered_df["matched_project_description"].notna().sum()
+    num_matches = filtered_df["matched_project_description"].notna().sum() if "matched_project_description" in filtered_df.columns else 0
     st.sidebar.info(f"Fuzzy matched project descriptions: {num_matches} rows matched ≥70%")
 
 # -------------------------------
