@@ -781,15 +781,18 @@ if misc_file is not None:
 # -------------------------------
 pid_file = st.sidebar.file_uploader(
     "Upload Planning / Scope Parquet",
-    type=["parquet"],
-    help="Contains project, shire, project description and material scope"
+    type=["parquet"]
 )
 
 pid_df = None
 if pid_file is not None:
-    pid_df = pd.read_parquet(pid_file)
-    pid_df.columns = pid_df.columns.str.strip().str.lower()
-    st.sidebar.success(f"Metadata file loaded: {pid_file.name}")
+    try:
+        pid_df = pd.read_parquet(pid_file)
+        pid_df.columns = pid_df.columns.str.strip().str.lower()
+        st.sidebar.success(f"Metadata file loaded: {pid_file.name}")
+    except Exception as e:
+        st.sidebar.error(f"Error loading file: {e}")
+        pid_df = None
 
 # -------------------------------
 # --- Merge Aggregated DF with Metadata ---
