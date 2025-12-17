@@ -733,7 +733,6 @@ st.markdown("<h1>📊 Data Management Dashboard</h1>", unsafe_allow_html=True)
 # -------------------------------
 # --- File Upload & Initial DF ---
 # -------------------------------
-# --- Upload Aggregated Parquet file ---
 # --- Load aggregated Parquet file ---
 aggregated_file = r"CF_aggregated.parquet"
 if aggregated_file is not None:
@@ -777,6 +776,9 @@ if misc_file is not None:
 # -------------------------------
 # --- Upload Planning / Scope Parquet ---
 # -------------------------------
+# -------------------------------
+# --- Upload Planning / Scope Parquet ---
+# -------------------------------
 pid_file = st.sidebar.file_uploader(
     "Upload Planning / Scope Parquet",
     type=["parquet"],
@@ -799,7 +801,7 @@ if pid_df is not None:
     for col in ["project", "shire"]:
         enriched_df[col] = enriched_df[col].astype(str).str.strip().str.lower()
         pid_df[col] = pid_df[col].astype(str).str.strip().str.lower()
-    
+
     # Exact merge on project & shire
     enriched_df = enriched_df.merge(
         pid_df,
@@ -807,22 +809,22 @@ if pid_df is not None:
         how="left",
         suffixes=("", "_meta")
     )
-    
+
     # Optional fuzzy matching for project description
     allow_fuzzy = st.sidebar.checkbox(
         "Allow fuzzy matching between Segment and Project Description (≥70%)",
         value=True
     )
-    
+
     if allow_fuzzy and "project_description" in pid_df.columns and "segmentdesc" in enriched_df.columns:
         project_desc_list = pid_df["project_description"].dropna().unique().tolist()
-        
+
         def fuzzy_match_segment(segment_desc, project_desc_list):
             if pd.isna(segment_desc):
                 return None, 0
             match, score = process.extractOne(segment_desc, project_desc_list, scorer=fuzz.partial_ratio)
             return match, score
-        
+
         fuzzy_results = enriched_df.apply(
             lambda row: fuzzy_match_segment(row.get("segmentdesc", ""), project_desc_list),
             axis=1,
@@ -830,7 +832,7 @@ if pid_df is not None:
         )
         enriched_df["matched_project_description"] = fuzzy_results[0]
         enriched_df["match_score"] = fuzzy_results[1]
-        
+
         # Only keep matches ≥70%
         enriched_df.loc[enriched_df["match_score"] < 70, "matched_project_description"] = None
     else:
@@ -862,54 +864,49 @@ selected_pm, filtered_df = multi_select_filter('projectmanager', "Select Project
 selected_segment, filtered_df = multi_select_filter('segmentcode', "Select Segment Code", filtered_df)
 selected_type, filtered_df = multi_select_filter('type', "Select Type", filtered_df)
 
-# -------------------------------
-# --- Optional: Show Fuzzy Matches in Sidebar ---
-# -------------------------------
+# Optional: Show Fuzzy Matches
 if pid_df is not None and allow_fuzzy:
     num_matches = filtered_df["matched_project_description"].notna().sum()
     st.sidebar.info(f"Fuzzy matched project descriptions: {num_matches} rows matched ≥70%")
 
 # -------------------------------
-# --- Continue with your existing dashboard logic ---
-# Use `filtered_df` everywhere instead of `agg_view` or `df`
+# --- Date Filter ---
 # -------------------------------
-st.write("Filtered data preview:")
-st.dataframe(filtered_df.head(10))
+filter_type = st.sidebar.selectbox(
+    "Filter by Date",
+    ["Single Day", "Week", "Month", "Year", "Custom Range", "Unplanned"]
+)
+date_range_str = ""
 
-    # -------------------------------
-    # --- Date Filter ---
-    # -------------------------------
-    filter_type = st.sidebar.selectbox("Filter by Date", ["Single Day", "Week", "Month", "Year", "Custom Range", "Unplanned"])
-    date_range_str = ""
-    if 'datetouse' in filtered_df.columns:
-        if filter_type == "Single Day":
-            date_selected = st.sidebar.date_input("Select date")
-            filtered_df = filtered_df[filtered_df['datetouse'] == pd.Timestamp(date_selected)]
-            date_range_str = str(date_selected)
-        elif filter_type == "Week":
-            week_start = st.sidebar.date_input("Week start date")
-            week_end = week_start + pd.Timedelta(days=6)
-            filtered_df = filtered_df[(filtered_df['datetouse'] >= pd.Timestamp(week_start)) &
-                                      (filtered_df['datetouse'] <= pd.Timestamp(week_end))]
-            date_range_str = f"{week_start} to {week_end}"
-        elif filter_type == "Month":
-            month_selected = st.sidebar.date_input("Pick any date in month")
-            filtered_df = filtered_df[(filtered_df['datetouse'].dt.month == month_selected.month) &
-                                      (filtered_df['datetouse'].dt.year == month_selected.year)]
-            date_range_str = month_selected.strftime("%B %Y")
-        elif filter_type == "Year":
-            year_selected = st.sidebar.number_input("Select year", min_value=2000, max_value=2100, value=2025)
-            filtered_df = filtered_df[filtered_df['datetouse'].dt.year == year_selected]
-            date_range_str = str(year_selected)
-        elif filter_type == "Custom Range":
-            start_date = st.sidebar.date_input("Start date")
-            end_date = st.sidebar.date_input("End date")
-            filtered_df = filtered_df[(filtered_df['datetouse'] >= pd.Timestamp(start_date)) &
-                                      (filtered_df['datetouse'] <= pd.Timestamp(end_date))]
-            date_range_str = f"{start_date} to {end_date}"
-        elif filter_type == "Unplanned":
-            filtered_df = filtered_df[filtered_df['datetouse'].isna()]
-            date_range_str = "Unplanned"
+if 'datetouse' in filtered_df.columns:
+    if filter_type == "Single Day":
+        date_selected = st.sidebar.date_input("Select date")
+        filtered_df = filtered_df[filtered_df['datetouse'] == pd.Timestamp(date_selected)]
+        date_range_str = str(date_selected)
+    elif filter_type == "Week":
+        week_start = st.sidebar.date_input("Week start date")
+        week_end = week_start + pd.Timedelta(days=6)
+        filtered_df = filtered_df[(filtered_df['datetouse'] >= pd.Timestamp(week_start)) &
+                                  (filtered_df['datetouse'] <= pd.Timestamp(week_end))]
+        date_range_str = f"{week_start} to {week_end}"
+    elif filter_type == "Month":
+        month_selected = st.sidebar.date_input("Pick any date in month")
+        filtered_df = filtered_df[(filtered_df['datetouse'].dt.month == month_selected.month) &
+                                  (filtered_df['datetouse'].dt.year == month_selected.year)]
+        date_range_str = month_selected.strftime("%B %Y")
+    elif filter_type == "Year":
+        year_selected = st.sidebar.number_input("Select year", min_value=2000, max_value=2100, value=2025)
+        filtered_df = filtered_df[filtered_df['datetouse'].dt.year == year_selected]
+        date_range_str = str(year_selected)
+    elif filter_type == "Custom Range":
+        start_date = st.sidebar.date_input("Start date")
+        end_date = st.sidebar.date_input("End date")
+        filtered_df = filtered_df[(filtered_df['datetouse'] >= pd.Timestamp(start_date)) &
+                                  (filtered_df['datetouse'] <= pd.Timestamp(end_date))]
+        date_range_str = f"{start_date} to {end_date}"
+    elif filter_type == "Unplanned":
+        filtered_df = filtered_df[filtered_df['datetouse'].isna()]
+        date_range_str = "Unplanned"
 
     # -------------------------------
     # --- Total & Variation Display ---
