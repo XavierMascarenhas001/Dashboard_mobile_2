@@ -789,58 +789,78 @@ except Exception as e:
 # -------------------------------
 # --- Merge Aggregated DF with Metadata ---
 # -------------------------------
-enriched_df = agg_view.copy()  # agg_view from your earlier loading of aggregated parquet
+# -------------------------------
+# --- Ensure merge key exists ---
+# --- Normalize Columns ---
+# -------------------------------
+def normalize_cols(df):
+    df = df.copy()
+    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
+    return df
 
+enriched_df = normalize_cols(agg_view)
 if pid_df is not None:
-    # Ensure merge columns exist
-    for col in ["project", "shire"]:
-        if col in enriched_df.columns and col in pid_df.columns:
-            enriched_df[col] = enriched_df[col].astype(str).str.strip().str.lower()
-            pid_df[col] = pid_df[col].astype(str).str.strip().str.lower()
-        else:
-            st.warning(f"Column '{col}' missing for merging. Merge may fail.")
+    pid_df = normalize_cols(pid_df)
+merge_keys = ["project", "shire", "pid_ohl_nr"]  # composite key
+for col in merge_keys:
+    if col not in enriched_df.columns:
+        enriched_df[col] = ""
+    if col not in pid_df.columns:
+        pid_df[col] = ""
 
-    try:
-        enriched_df = enriched_df.merge(
-            pid_df,
-            on=["project", "shire"],
-            how="left",
-            suffixes=("", "_meta")
-        )
-    except Exception as e:
-        st.warning(f"Merge failed: {e}")
+# Strip and lowercase to avoid mismatches
+for col in merge_keys:
+    enriched_df[col] = enriched_df[col].astype(str).str.strip().str.lower()
+    pid_df[col] = pid_df[col].astype(str).str.strip().str.lower()
 
-    # Optional fuzzy matching
-    allow_fuzzy = st.sidebar.checkbox(
-        "Allow fuzzy matching between Segment and Project Description (≥70%)",
-        value=True
+# -------------------------------
+# --- Merge ---
+# -------------------------------
+try:
+    enriched_df = enriched_df.merge(
+        pid_df,
+        on=merge_keys,
+        how="left",
+        suffixes=("", "_meta")
     )
+    st.sidebar.success("Enriched dataframe merged with metadata successfully")
+except Exception as e:
+    st.warning(f"Merge failed: {e}")
 
-    if allow_fuzzy and 'project_description' in pid_df.columns and 'segmentdesc' in enriched_df.columns:
-        from rapidfuzz import process, fuzz
+# -------------------------------
+# --- Fuzzy Matching (optional) ---
+# -------------------------------
+allow_fuzzy = st.sidebar.checkbox(
+    "Allow fuzzy matching between Segment and Project Description (≥70%)",
+    value=True
+)
 
-        pid_df['project_description'] = pid_df['project_description'].astype(str).fillna("")
-        enriched_df['segmentdesc'] = enriched_df['segmentdesc'].astype(str).fillna("")
+if allow_fuzzy and 'project_description' in pid_df.columns and 'segmentdesc' in enriched_df.columns:
+    from rapidfuzz import process, fuzz
 
-        project_desc_list = pid_df['project_description'].unique().tolist()
+    pid_df['project_description'] = pid_df['project_description'].astype(str).fillna("")
+    enriched_df['segmentdesc'] = enriched_df['segmentdesc'].astype(str).fillna("")
 
-        def fuzzy_match_segment(segment_desc, project_desc_list):
-            if not segment_desc:
-                return None, 0
-            match, score = process.extractOne(segment_desc, project_desc_list, scorer=fuzz.partial_ratio)
-            return match, score
+    project_desc_list = pid_df['project_description'].unique().tolist()
 
-        fuzzy_results = enriched_df.apply(
-            lambda row: fuzzy_match_segment(row.get("segmentdesc", ""), project_desc_list),
-            axis=1,
-            result_type="expand"
-        )
-        enriched_df["matched_project_description"] = fuzzy_results[0]
-        enriched_df["match_score"] = fuzzy_results[1]
-        enriched_df.loc[enriched_df["match_score"] < 70, "matched_project_description"] = None
-    else:
-        enriched_df["matched_project_description"] = None
-        enriched_df["match_score"] = None
+    def fuzzy_match_segment(segment_desc, project_desc_list):
+        if not segment_desc:
+            return None, 0
+        match, score = process.extractOne(segment_desc, project_desc_list, scorer=fuzz.partial_ratio)
+        return match, score
+
+    fuzzy_results = enriched_df.apply(
+        lambda row: fuzzy_match_segment(row.get("segmentdesc", ""), project_desc_list),
+        axis=1,
+        result_type="expand"
+    )
+    enriched_df["matched_project_description"] = fuzzy_results[0]
+    enriched_df["match_score"] = fuzzy_results[1]
+    enriched_df.loc[enriched_df["match_score"] < 70, "matched_project_description"] = None
+else:
+    enriched_df["matched_project_description"] = None
+    enriched_df["match_score"] = None
+
 
 # -------------------------------
 # --- Sidebar Filters ---
@@ -1451,7 +1471,7 @@ if 'datetouse' in filtered_df.columns:
 
 
             # Your original approach but working:
-            extra_cols = ['poling team','team_name','segmentdesc','segmentcode', 'projectmanager', 'project', 'shire','material code' , 'sourcefile']
+            extra_cols = ['poling team','team_name','segmentdesc','segmentcode', 'projectmanager', 'project', 'shire','material code' , 'sourcefile','pid_ohl_nr']
             
             # Rename first
             selected_rows = selected_rows.rename(columns={
