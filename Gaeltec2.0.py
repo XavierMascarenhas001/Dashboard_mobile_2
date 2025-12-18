@@ -790,31 +790,38 @@ except Exception as e:
 # --- Merge Aggregated DF with Metadata ---
 # -------------------------------
 # -------------------------------
-# --- Ensure merge key exists ---
-# --- Normalize Columns ---
+# --- Normalize Columns Function ---
 # -------------------------------
 def normalize_cols(df):
     df = df.copy()
     df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
     return df
 
-enriched_df = normalize_cols(agg_view)
+# -------------------------------
+# --- Normalize dataframes ---
+# -------------------------------
+enriched_df = normalize_cols(agg_view)  # agg_view = your aggregated parquet
 if pid_df is not None:
     pid_df = normalize_cols(pid_df)
+
+# -------------------------------
+# --- Ensure merge keys exist ---
+# -------------------------------
 merge_keys = ["project", "shire", "pid_ohl_nr"]  # composite key
+
 for col in merge_keys:
     if col not in enriched_df.columns:
         enriched_df[col] = ""
     if col not in pid_df.columns:
         pid_df[col] = ""
 
-# Strip and lowercase to avoid mismatches
+# Strip and lowercase
 for col in merge_keys:
     enriched_df[col] = enriched_df[col].astype(str).str.strip().str.lower()
     pid_df[col] = pid_df[col].astype(str).str.strip().str.lower()
 
 # -------------------------------
-# --- Merge ---
+# --- Merge enriched_df with pid_df ---
 # -------------------------------
 try:
     enriched_df = enriched_df.merge(
@@ -838,17 +845,23 @@ allow_fuzzy = st.sidebar.checkbox(
 if allow_fuzzy and 'project_description' in pid_df.columns and 'segmentdesc' in enriched_df.columns:
     from rapidfuzz import process, fuzz
 
-    pid_df['project_description'] = pid_df['project_description'].astype(str).fillna("")
-    enriched_df['segmentdesc'] = enriched_df['segmentdesc'].astype(str).fillna("")
+    # Ensure project_description is clean
+    project_desc_list = [str(x).strip() for x in pid_df['project_description'].dropna().unique() if str(x).strip()]
 
-    project_desc_list = pid_df['project_description'].unique().tolist()
+    # Ensure segmentdesc is string and safe
+    enriched_df['segmentdesc'] = enriched_df['segmentdesc'].astype(str).fillna("").str.strip()
 
     def fuzzy_match_segment(segment_desc, project_desc_list):
-        if not segment_desc:
+        segment_desc = str(segment_desc).strip()
+        if not segment_desc or not project_desc_list:
             return None, 0
-        match, score = process.extractOne(segment_desc, project_desc_list, scorer=fuzz.partial_ratio)
-        return match, score
+        try:
+            match, score = process.extractOne(segment_desc, project_desc_list, scorer=fuzz.partial_ratio)
+            return match, score
+        except Exception:
+            return None, 0
 
+    # Apply fuzzy matching safely
     fuzzy_results = enriched_df.apply(
         lambda row: fuzzy_match_segment(row.get("segmentdesc", ""), project_desc_list),
         axis=1,
@@ -860,6 +873,7 @@ if allow_fuzzy and 'project_description' in pid_df.columns and 'segmentdesc' in 
 else:
     enriched_df["matched_project_description"] = None
     enriched_df["match_score"] = None
+
 
 
 # -------------------------------
