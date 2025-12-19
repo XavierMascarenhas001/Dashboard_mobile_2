@@ -785,7 +785,10 @@ def preprocess_string(text):
 
 def find_best_match(target, candidates, threshold=75):
     """Find the best fuzzy match for a target string among candidates"""
-    if not target or not candidates:
+    # Explicitly check for NaN values
+    if pd.isna(target):
+        return None, 0
+    if candidates is None or len(candidates) == 0:
         return None, 0
     
     best_match = None
