@@ -10,42 +10,80 @@ import glob
 from PIL import Image
 from io import BytesIO
 import base64
-from streamlit_plotly_events import plotly_events
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
 import requests
-from streamlit import cache_data
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_COLOR_INDEX
 from collections import OrderedDict
-import pyarrow as pa
-import pyarrow.parquet as pq
-from difflib import SequenceMatcher
-from rapidfuzz import fuzz, process
 
 # --- Page config for wide layout ---
 st.set_page_config(
     page_title="Gaeltec Dashboard",
-    layout="wide",  # <-- makes the dashboard wider
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# ==============================================
+# 1. ADD MISSING FUNCTION
+# ==============================================
+def assess_construction_impact(weather_data):
+    """Assess construction impact based on weather conditions"""
+    if not weather_data:
+        return "No weather data available"
+    
+    try:
+        conditions = {
+            'temp': weather_data['main']['temp'],
+            'description': weather_data['weather'][0]['description'].lower(),
+            'wind_speed': weather_data['wind']['speed'],
+            'humidity': weather_data['main']['humidity']
+        }
+        
+        impacts = []
+        
+        # Temperature impact
+        if conditions['temp'] < 0:
+            impacts.append("❄️ **High Impact**: Freezing conditions - ground work difficult")
+        elif conditions['temp'] < 5:
+            impacts.append("🌡️ **Medium Impact**: Cold conditions - slower work pace")
+        elif conditions['temp'] > 25:
+            impacts.append("🔥 **Medium Impact**: Hot conditions - hydration breaks needed")
+        else:
+            impacts.append("✅ **Low Impact**: Ideal temperature conditions")
+        
+        # Precipitation impact
+        precip_keywords = ['rain', 'drizzle', 'shower', 'storm', 'thunder']
+        if any(keyword in conditions['description'] for keyword in precip_keywords):
+            impacts.append("🌧️ **High Impact**: Wet conditions - outdoor work limited")
+        
+        # Wind impact
+        if conditions['wind_speed'] > 10:
+            impacts.append("💨 **High Impact**: High winds - unsafe for work at height")
+        elif conditions['wind_speed'] > 6:
+            impacts.append("💨 **Medium Impact**: Windy conditions - use caution")
+        
+        # Humidity impact
+        if conditions['humidity'] > 80:
+            impacts.append("💧 **Low Impact**: High humidity - equipment may be affected")
+        
+        return "\n\n".join(impacts) if impacts else "✅ **Low Impact**: Favorable conditions for construction"
+    
+    except Exception as e:
+        return f"Could not assess impact: {str(e)}"
+
+# ==============================================
+# 2. FIXED HELPER FUNCTIONS
+# ==============================================
 def sanitize_sheet_name(name: str) -> str:
-    """
-    Remove or replace invalid characters for Excel sheet names.
-    Excel sheet names cannot contain: : \ / ? * [ ]
-    """
+    """Remove or replace invalid characters for Excel sheet names."""
     name = str(name)
     name = re.sub(r'[:\\/*?\[\]]', '_', name)
     name = re.sub(r'[^\x00-\x7F]', '_', name)
     return name[:31]
 
 def get_scottish_weather(api_key, location="Ayrshire"):
-    """
-    Get weather data for Scottish locations
-    """
-    # Coordinates for Scottish locations
+    """Get weather data for Scottish locations"""
     locations = {
         "Ayrshire": {"lat": 55.458, "lon": -4.629},
         "Lanarkshire": {"lat": 55.676, "lon": -3.785},
@@ -56,7 +94,6 @@ def get_scottish_weather(api_key, location="Ayrshire"):
     if location in locations:
         coords = locations[location]
     else:
-        # Default to Ayrshire
         coords = locations["Ayrshire"]
     
     base_url = "http://api.openweathermap.org/data/2.5/weather"
@@ -68,18 +105,16 @@ def get_scottish_weather(api_key, location="Ayrshire"):
     }
     
     try:
-        response = requests.get(base_url, params=params)
+        response = requests.get(base_url, params=params, timeout=10)
         response.raise_for_status()
         return response.json()
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         st.error(f"Error fetching weather data: {e}")
         return None
 
-@cache_data(ttl=1800)  # Cache for 30 minutes
+@st.cache_data(ttl=1800)
 def get_weather_forecast(api_key, location="Ayrshire"):
-    """
-    Get 5-day forecast for Scottish locations
-    """
+    """Get 5-day forecast for Scottish locations"""
     locations = {
         "Ayrshire": {"lat": 55.458, "lon": -4.629},
         "Lanarkshire": {"lat": 55.676, "lon": -3.785}
@@ -99,86 +134,73 @@ def get_weather_forecast(api_key, location="Ayrshire"):
     }
     
     try:
-        response = requests.get(base_url, params=params)
+        response = requests.get(base_url, params=params, timeout=10)
         response.raise_for_status()
         return response.json()
     except Exception as e:
         st.error(f"Forecast API error: {e}")
         return None
 
-
 def poles_to_word(df: pd.DataFrame) -> BytesIO:
+    """Convert pole data to Word document"""
     doc = Document()
-
-    # Defensive cleaning
+    
     df = df.copy()
-    df = df.replace(
-        to_replace=["nan", "NaN", "None", None],
-        value=""
-    )
-
+    df = df.replace(to_replace=["nan", "NaN", "None", None], value="")
+    
     grouped = df.groupby('pole', sort=False)
-
+    
     for pole, group in grouped:
         pole_str = str(pole).strip()
         if not pole_str:
             continue
-
-        # Ordered set using dict keys (preserves order, removes duplicates)
+        
         unique_texts = OrderedDict()
-
+        
         for _, row in group.iterrows():
             parts = []
-
             wi = str(row.get('Work instructions', '')).strip()
             comment = str(row.get('comment', '')).strip()
-
+            
             if wi:
                 parts.append(wi)
-
             if comment:
                 parts.append(f"({comment})")
-
+            
             if parts:
                 text = " ".join(parts)
-
-                # Normalize for deduplication
                 normalized = text.lower().strip()
-
                 unique_texts[normalized] = text
-
+        
         if not unique_texts:
             continue
-
-        # Bullet paragraph
+        
         p = doc.add_paragraph(style='List Bullet')
-
         run_number = p.add_run(f"{pole_str} – ")
         run_number.bold = True
         run_number.font.name = 'Times New Roman'
         run_number.font.size = Pt(12)
-
+        
         texts = list(unique_texts.values())
-
         for i, text in enumerate(texts):
             run_item = p.add_run(text)
             run_item.bold = True
             run_item.font.name = 'Times New Roman'
             run_item.font.size = Pt(12)
-
+            
             if "Erect Pole" in text:
                 run_item.font.highlight_color = WD_COLOR_INDEX.RED
-
+            
             if i < len(texts) - 1:
                 p.add_run(" ; ")
-
+    
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
-
 def normalize_cols(df):
+    """Normalize column names"""
     df = df.copy()
     df.columns = (
         df.columns
@@ -188,8 +210,9 @@ def normalize_cols(df):
     )
     return df
 
-
+@st.cache_data
 def safe_read_parquet(path, label=None):
+    """Safely read parquet files"""
     try:
         df = pd.read_parquet(path, engine="pyarrow")
         df = normalize_cols(df)
@@ -199,9 +222,7 @@ def safe_read_parquet(path, label=None):
     except Exception as e:
         st.sidebar.error(f"Failed to load {path}: {e}")
         return None
-# -------------------------------
-# --- Sidebar Filters Function ---
-# -------------------------------
+
     
 # --- MAPPINGS ---
 
@@ -730,6 +751,9 @@ categories = [
 ]
 
 
+# ==============================================
+# 4. STREAMLIT UI SETUP
+# ==============================================
 # --- Gradient background ---
 gradient_bg = """
 <style>
@@ -746,36 +770,54 @@ gradient_bg = """
 st.markdown(gradient_bg, unsafe_allow_html=True)
 
 # --- Load logos ---
-logo_left = Image.open(r"Images/GaeltecImage.png").resize((80, 80))
-logo_right = Image.open(r"Images/SPEN.png").resize((160, 80))
+try:
+    logo_left = Image.open("Images/GaeltecImage.png").resize((80, 80))
+    logo_right = Image.open("Images/SPEN.png").resize((160, 80))
+except:
+    st.warning("Logo images not found. Please check file paths.")
+    logo_left = logo_right = None
 
 # --- Header layout ---
 col1, col2, col3 = st.columns([1, 4, 1])
-with col1: st.image(logo_left)
-with col2: st.markdown("<h1 style='text-align:center; margin:0;'>Gaeltec Utilities.UK</h1>", unsafe_allow_html=True)
-with col3: st.image(logo_right)
+with col1:
+    if logo_left:
+        st.image(logo_left)
+with col2:
+    st.markdown("<h1 style='text-align:center; margin:0;'>Gaeltec Utilities.UK</h1>", unsafe_allow_html=True)
+with col3:
+    if logo_right:
+        st.image(logo_right)
+
 st.markdown("<h1>📊 Data Management Dashboard</h1>", unsafe_allow_html=True)
 
-# -------------------------------
-# --- File Upload & Initial DF ---
-# -------------------------------
-# --- Load aggregated Parquet file ---
-@st.cache_data(show_spinner=False)
-def load_parquet(path):
-    df = pd.read_parquet(path)
-    df.columns = df.columns.str.strip().str.lower()
-    return df
+# ==============================================
+# 5. FIXED DATA LOADING
+# ==============================================
+@st.cache_data
+def load_data():
+    """Load all data files"""
+    agg_view = safe_read_parquet("CF_aggregated.parquet", "Aggregated data")
+    resume_df = safe_read_parquet("CF_resume.parquet", "Resume data")
+    misc_df = safe_read_parquet("miscelaneous.parquet", "Miscellaneous data")
+    pid_df = safe_read_parquet("Resume_PID.parquet", "PID data")
+    
+    return agg_view, resume_df, misc_df, pid_df
 
-agg_view = load_parquet("CF_aggregated.parquet")
-resume_df = load_parquet("CF_resume.parquet")
-misc_df = load_parquet("miscelaneous.parquet")
-pid_df = load_parquet("Resume_PID.parquet")
+agg_view, resume_df, misc_df, pid_df = load_data()
 
+# Check if data loaded successfully
+if agg_view is None:
+    st.error("Failed to load main data file. Please check if 'CF_aggregated.parquet' exists.")
+    st.stop()
+
+# ==============================================
+# 6. FIXED DATA PROCESSING
+# ==============================================
+# Process date columns
 if "datetouse" in agg_view.columns:
     agg_view["datetouse_dt"] = pd.to_datetime(
         agg_view["datetouse"], errors="coerce"
     ).dt.normalize()
-
     agg_view["datetouse_display"] = agg_view["datetouse_dt"].dt.strftime("%d/%m/%Y")
     agg_view.loc[
         agg_view["datetouse_dt"].isna(), "datetouse_display"
@@ -784,10 +826,11 @@ else:
     agg_view["datetouse_dt"] = pd.NaT
     agg_view["datetouse_display"] = "Unplanned"
 
-
+# Merge with PID data
 merge_keys = ["project", "shire", "pid_ohl_nr"]
 
 def normalize_merge_keys(df, keys):
+    """Normalize merge key columns"""
     for k in keys:
         if k not in df.columns:
             df[k] = ""
@@ -795,78 +838,45 @@ def normalize_merge_keys(df, keys):
     return df
 
 agg_view = normalize_merge_keys(agg_view, merge_keys)
-pid_df = normalize_merge_keys(pid_df, merge_keys)
-
-enriched_df = agg_view.merge(
-    pid_df,
-    on=merge_keys,
-    how="left",
-    suffixes=("", "_meta")
-)
-
-
-
-@st.cache_data(show_spinner=False)
-def fuzzy_match_series(segment_series, project_descs):
-    def match(seg):
-        if not seg:
-            return None, 0
-        res = process.extractOne(seg, project_descs, scorer=fuzz.partial_ratio)
-        return res if res else (None, 0)
-
-    return segment_series.apply(lambda x: pd.Series(match(x)))
-
-allow_fuzzy = st.sidebar.checkbox("Allow fuzzy matching ≥70%", True)
-
-if (
-    allow_fuzzy
-    and "segmentdesc" in enriched_df.columns
-    and "project_description" in pid_df.columns
-):
-    project_descs = (
-        pid_df["project_description"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
+if pid_df is not None:
+    pid_df = normalize_merge_keys(pid_df, merge_keys)
+    
+    enriched_df = agg_view.merge(
+        pid_df,
+        on=merge_keys,
+        how="left",
+        suffixes=("", "_meta")
     )
-
-    enriched_df[["matched_project_description", "match_score"]] = (
-        fuzzy_match_series(
-            enriched_df["segmentdesc"].astype(str),
-            project_descs
-        )
-    )
-
-    enriched_df.loc[
-        enriched_df["match_score"] < 70,
-        "matched_project_description"
-    ] = None
 else:
-    enriched_df["matched_project_description"] = None
-    enriched_df["match_score"] = None
-# -------------------------------
-# --- Sidebar Filters ---
-# -------------------------------
-filtered_df = enriched_df.copy()
+    enriched_df = agg_view.copy()
+    st.warning("PID data not available. Some features may be limited.")
+
+# ==============================================
+# 7. FIXED SIDEBAR FILTERS
+# ==============================================
+st.sidebar.header("📊 Filters")
 
 def multi_select_filter(col, label, df, parent=None):
+    """Create multi-select filter"""
     if col not in df.columns:
         return ["All"], df
-
+    
     temp = df.copy()
     if parent and "All" not in parent[1]:
         temp = temp[temp[parent[0]].isin(parent[1])]
-
+    
     options = ["All"] + sorted(temp[col].dropna().unique())
     selected = st.sidebar.multiselect(label, options, default=["All"])
-
+    
     if "All" not in selected:
         temp = temp[temp[col].isin(selected)]
-
+    
     return selected, temp
 
+# Initialize filtered dataframe
+filtered_df = enriched_df.copy()
 
+# Apply filters sequentially
 selected_shire, filtered_df = multi_select_filter("shire", "Shire", filtered_df)
 selected_project, filtered_df = multi_select_filter(
     "project", "Project", filtered_df, ("shire", selected_shire)
@@ -875,158 +885,171 @@ selected_pm, filtered_df = multi_select_filter(
     "projectmanager", "Project Manager", filtered_df, ("shire", selected_shire)
 )
 
-# -------------------------------
-# --- Date Filter ---
-# -------------------------------
-filtered_df = enriched_df.copy()
+# ==============================================
+# 8. FIXED DATE FILTER (ADD MISSING LOGIC)
+# ==============================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("📅 Date Range Filter")
 
-def multi_select_filter(col, label, df, parent=None):
-    if col not in df.columns:
-        return ["All"], df
+if 'datetouse_dt' in filtered_df.columns:
+    min_date = filtered_df['datetouse_dt'].min()
+    max_date = filtered_df['datetouse_dt'].max()
+    
+    if pd.notna(min_date) and pd.notna(max_date):
+        date_range = st.sidebar.date_input(
+            "Select date range:",
+            value=(min_date.date(), max_date.date()),
+            min_value=min_date.date(),
+            max_value=max_date.date()
+        )
+        
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+            filtered_df = filtered_df[
+                (filtered_df['datetouse_dt'] >= pd.Timestamp(start_date)) &
+                (filtered_df['datetouse_dt'] <= pd.Timestamp(end_date))
+            ]
+            date_range_str = f"{start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}"
+        else:
+            date_range_str = "All dates"
+    else:
+        date_range_str = "Date data unavailable"
+        st.sidebar.info("No valid date data available")
+else:
+    date_range_str = "No date column"
+    st.sidebar.info("Date column not found in data")
 
-    temp = df.copy()
-    if parent and "All" not in parent[1]:
-        temp = temp[temp[parent[0]].isin(parent[1])]
-
-    options = ["All"] + sorted(temp[col].dropna().unique())
-    selected = st.sidebar.multiselect(label, options, default=["All"])
-
-    if "All" not in selected:
-        temp = temp[temp[col].isin(selected)]
-
-    return selected, temp
-
-selected_shire, filtered_df = multi_select_filter("shire", "Shire", filtered_df)
-selected_project, filtered_df = multi_select_filter(
-    "project", "Project", filtered_df, ("shire", selected_shire)
-)
-selected_pm, filtered_df = multi_select_filter(
-    "projectmanager", "Project Manager", filtered_df
-)
-
-# Apply misc material mapping ONCE
+# ==============================================
+# 9. MAIN DASHBOARD DISPLAY
+# ==============================================
+# Apply misc material mapping
 if misc_df is not None and "item" in filtered_df.columns:
     filtered_df["item"] = filtered_df["item"].astype(str)
     misc_df["column_b"] = misc_df["column_b"].astype(str)
-
+    
     material_map = misc_df.set_index("column_b")["column_k"].to_dict()
     filtered_df["material code"] = filtered_df["item"].map(material_map)
 
-    # -------------------------------
-    # --- Total & Variation Display ---
-    # -------------------------------
-    total_sum, variation_sum = 0, 0
-    if 'total' in filtered_df.columns:
-        total_series = pd.to_numeric(filtered_df['total'].astype(str).str.replace(" ", "").str.replace(",", ".", regex=False),
-                                     errors='coerce')
-        total_sum = total_series.sum(skipna=True)
-        if 'orig' in filtered_df.columns:
-            orig_series = pd.to_numeric(filtered_df['orig'].astype(str).str.replace(" ", "").str.replace(",", ".", regex=False),
-                                        errors='coerce')
-            variation_sum = (total_series - orig_series).sum(skipna=True)
+# Calculate totals
+total_sum, variation_sum = 0, 0
+if 'total' in filtered_df.columns:
+    total_series = pd.to_numeric(
+        filtered_df['total'].astype(str).str.replace(" ", "").str.replace(",", ".", regex=False),
+        errors='coerce'
+    )
+    total_sum = total_series.sum(skipna=True)
+    
+    if 'orig' in filtered_df.columns:
+        orig_series = pd.to_numeric(
+            filtered_df['orig'].astype(str).str.replace(" ", "").str.replace(",", ".", regex=False),
+            errors='coerce'
+        )
+        variation_sum = (total_series - orig_series).sum(skipna=True)
 
-    formatted_total = f"{total_sum:,.2f}".replace(",", " ").replace(".", ",")
-    formatted_variation = f"{variation_sum:,.2f}".replace(",", " ").replace(".", ",")
+formatted_total = f"{total_sum:,.2f}".replace(",", " ").replace(".", ",")
+formatted_variation = f"{variation_sum:,.2f}".replace(",", " ").replace(".", ",")
 
-    # Money logo
-    money_logo_path = r"Images/Pound.png"
-    money_logo = Image.open(money_logo_path).resize((40, 40))
+# Display Total & Variation
+st.markdown("<h2>Financial</h2>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
+
+# Money logo display
+try:
+    money_logo = Image.open("Images/Pound.png").resize((40, 40))
     buffered = BytesIO()
     money_logo.save(buffered, format="PNG")
     money_logo_base64 = base64.b64encode(buffered.getvalue()).decode()
-
-    # Display Total & Variation (Centered)
-    st.markdown("<h2>Financial</h2>", unsafe_allow_html=True)
-    st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
-    try:
-        st.markdown(
-            f"""
-            <div style='display:flex; justify-content:center;'>
-                <div style='display:flex; flex-direction:column; gap:4px;'>
-                    <div style='display:flex; align-items:center; gap:10px;'>
-                        <h2 style='color:#32CD32; margin:0; font-size:36px;'><b>Total:</b> {formatted_total}</h2>
-                        <img src='data:image/png;base64,{money_logo_base64}' width='40' height='40'/>
-                    </div>
-                    <div style='display:flex; align-items:center; gap:8px;'>
-                        <h2 style='color:#32CD32; font-size:25px; margin:0;'><b>Variation:</b> {formatted_variation}</h2>
-                        <img src='data:image/png;base64,{money_logo_base64}' width='28' height='28'/>
-                    </div>
-                    <p style='text-align:center; font-size:14px; margin-top:4px;'>
-                        ({date_range_str}, Shires: {selected_shire}, Projects: {selected_project}, PMs: {selected_pm})
-                    </p>
+    
+    st.markdown(
+        f"""
+        <div style='display:flex; justify-content:center;'>
+            <div style='display:flex; flex-direction:column; gap:4px;'>
+                <div style='display:flex; align-items:center; gap:10px;'>
+                    <h2 style='color:#32CD32; margin:0; font-size:36px;'><b>Total:</b> {formatted_total}</h2>
+                    <img src='data:image/png;base64,{money_logo_base64}' width='40' height='40'/>
                 </div>
+                <div style='display:flex; align-items:center; gap:8px;'>
+                    <h2 style='color:#32CD32; font-size:25px; margin:0;'><b>Variation:</b> {formatted_variation}</h2>
+                    <img src='data:image/png;base64,{money_logo_base64}' width='28' height='28'/>
+                </div>
+                <p style='text-align:center; font-size:14px; margin-top:4px;'>
+                    ({date_range_str}, Shires: {len(selected_shire) if 'All' not in selected_shire else 'All'}, 
+                    Projects: {len(selected_project) if 'All' not in selected_project else 'All'})
+                </p>
             </div>
-            """,
-            unsafe_allow_html=True
-        )
-    except Exception as e:
-        st.warning(f"Could not display Total & Variation: {e}")
-    # -------------------------------
-    # --- Revenue Chart (Full Width) ---
-    # -------------------------------
-    st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
-    try:
-        if 'filtered_df' in locals() and not filtered_df.empty and 'total' in filtered_df.columns:
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+except:
+    st.markdown(
+        f"""
+        <div style='text-align:center;'>
+            <h2 style='color:#32CD32;'>Total: {formatted_total}</h2>
+            <h3 style='color:#32CD32;'>Variation: {formatted_variation}</h3>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-            chart_df = filtered_df[filtered_df['datetouse_dt'].notna()].copy()
-            chart_df = chart_df[chart_df['datetouse_dt'] >= '2000-01-01']
-            chart_df['total'] = pd.to_numeric(chart_df['total'], errors='coerce')
-            chart_df = chart_df[chart_df['total'].notna()]
+# ==============================================
+# 10. REVENUE CHART (FIXED)
+# ==============================================
+st.markdown("<h3 style='text-align:center; color:white;'>Revenue Trend</h3>", unsafe_allow_html=True)
 
-            if not chart_df.empty:
-                revenue_by_date = chart_df.groupby('datetouse_dt')['total'].sum().reset_index()
-                revenue_by_date = revenue_by_date.sort_values('datetouse_dt')
-                revenue_by_date['total_formatted'] = revenue_by_date['total'].apply(
-                    lambda x: f"£{x:,.0f}" if x >= 1000 else f"€{x:.0f}"
-                )
-
-                fig_revenue = px.line(
-                    revenue_by_date,
-                    x='datetouse_dt',
-                    y='total',
-                    title="Daily Revenue",
-                    labels={'datetouse_dt': 'Date', 'total': 'Revenue (£)'}
-                )
-                fig_revenue.update_traces(
-                    mode='lines+markers',
-                    line=dict(width=3, color='#32CD32'),
-                    marker=dict(size=6, color='#32CD32'),
-                    hovertemplate='<b>Date: %{x}</b><br>Revenue: £%{y:,.0f}<extra></extra>'
-                )
-                fig_revenue.update_layout(
-                    height=600,  # taller chart
-                    xaxis=dict(
-                        tickformatstops=[
-                            dict(dtickrange=[None, 1000*60*60*24*30], value="%d %b %Y"),
-                            dict(dtickrange=[1000*60*60*24*30, None], value="%b %Y")
-                        ],
-                        tickangle=45,
-                        gridcolor='rgba(128,128,128,0.2)',
-                        rangeslider=dict(visible=True),
-                        type='date'
-                    ),
-                    yaxis=dict(
-                        title='Revenue (£)',
-                        tickformat=",.0f",
-                        gridcolor='rgba(128,128,128,0.2)',
-                        autorange=True,
-                        fixedrange=False  # <-- allow dynamic scaling on zoom
-                    ),
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='white'),
-                    title_font_size=16,
-                    hovermode='x unified'
-                )
-
-                st.plotly_chart(fig_revenue, use_container_width=True)
-            else:
-                st.info("No projects with dates since 2000 for selected filters.")
+try:
+    if not filtered_df.empty and 'total' in filtered_df.columns and 'datetouse_dt' in filtered_df.columns:
+        chart_df = filtered_df[filtered_df['datetouse_dt'].notna()].copy()
+        chart_df = chart_df[chart_df['datetouse_dt'] >= '2000-01-01']
+        chart_df['total'] = pd.to_numeric(chart_df['total'], errors='coerce')
+        chart_df = chart_df[chart_df['total'].notna()]
+        
+        if not chart_df.empty:
+            revenue_by_date = chart_df.groupby('datetouse_dt')['total'].sum().reset_index()
+            revenue_by_date = revenue_by_date.sort_values('datetouse_dt')
+            
+            fig_revenue = px.line(
+                revenue_by_date,
+                x='datetouse_dt',
+                y='total',
+                title="Daily Revenue",
+                labels={'datetouse_dt': 'Date', 'total': 'Revenue (£)'}
+            )
+            
+            fig_revenue.update_traces(
+                mode='lines+markers',
+                line=dict(width=3, color='#32CD32'),
+                marker=dict(size=6, color='#32CD32'),
+                hovertemplate='<b>Date: %{x}</b><br>Revenue: £%{y:,.0f}<extra></extra>'
+            )
+            
+            fig_revenue.update_layout(
+                height=500,
+                xaxis=dict(
+                    tickformat="%d %b %Y",
+                    tickangle=45,
+                    gridcolor='rgba(128,128,128,0.2)',
+                    rangeslider=dict(visible=True),
+                    type='date'
+                ),
+                yaxis=dict(
+                    title='Revenue (£)',
+                    tickformat=",.0f",
+                    gridcolor='rgba(128,128,128,0.2)'
+                ),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                font=dict(color='white'),
+                title_font_size=16
+            )
+            
+            st.plotly_chart(fig_revenue, use_container_width=True)
         else:
-            st.info("No data available for the selected filters.")
-
-    except Exception as e:
-        st.warning(f"Could not generate revenue chart: {e}")
+            st.info("No projects with valid dates and totals for selected filters.")
+    else:
+        st.info("No data available for revenue chart.")
+except Exception as e:
+    st.warning(f"Could not generate revenue chart: {str(e)}")
                 
     # Display Project and completion
     col_top_left, col_top_right = st.columns([1, 1])
