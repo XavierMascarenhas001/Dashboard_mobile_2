@@ -16,6 +16,8 @@ from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_COLOR_INDEX
 from collections import OrderedDict
+from difflib import SequenceMatcher
+from rapidfuzz import fuzz, process
 
 # --- Page config for wide layout ---
 st.set_page_config(
@@ -24,9 +26,78 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ==============================================
-# 1. ADD MISSING FUNCTION
-# ==============================================
+def sanitize_sheet_name(name: str) -> str:
+    """
+    Remove or replace invalid characters for Excel sheet names.
+    """
+    name = str(name)
+    name = re.sub(r'[:\\/*?\[\]]', '_', name)
+    name = re.sub(r'[^\x00-\x7F]', '_', name)
+    return name[:31]
+
+def get_scottish_weather(api_key, location="Ayrshire"):
+    """
+    Get weather data for Scottish locations
+    """
+    locations = {
+        "Ayrshire": {"lat": 55.458, "lon": -4.629},
+        "Lanarkshire": {"lat": 55.676, "lon": -3.785},
+        "Glasgow": {"lat": 55.864, "lon": -4.252},
+        "Edinburgh": {"lat": 55.953, "lon": -3.188}
+    }
+    
+    if location in locations:
+        coords = locations[location]
+    else:
+        coords = locations["Ayrshire"]
+    
+    base_url = "http://api.openweathermap.org/data/2.5/weather"
+    params = {
+        'lat': coords["lat"],
+        'lon': coords["lon"],
+        'appid': api_key,
+        'units': 'metric'
+    }
+    
+    try:
+        response = requests.get(base_url, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Error fetching weather data: {e}")
+        return None
+
+@st.cache_data(ttl=1800)
+def get_weather_forecast(api_key, location="Ayrshire"):
+    """
+    Get 5-day forecast for Scottish locations
+    """
+    locations = {
+        "Ayrshire": {"lat": 55.458, "lon": -4.629},
+        "Lanarkshire": {"lat": 55.676, "lon": -3.785}
+    }
+    
+    if location in locations:
+        coords = locations[location]
+    else:
+        coords = locations["Ayrshire"]
+    
+    base_url = "http://api.openweathermap.org/data/2.5/forecast"
+    params = {
+        'lat': coords["lat"],
+        'lon': coords["lon"],
+        'appid': api_key,
+        'units': 'metric'
+    }
+    
+    try:
+        response = requests.get(base_url, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Forecast API error: {e}")
+        return None
+
 def assess_construction_impact(weather_data):
     """Assess construction impact based on weather conditions"""
     if not weather_data:
@@ -72,96 +143,26 @@ def assess_construction_impact(weather_data):
     except Exception as e:
         return f"Could not assess impact: {str(e)}"
 
-# ==============================================
-# 2. FIXED HELPER FUNCTIONS
-# ==============================================
-def sanitize_sheet_name(name: str) -> str:
-    """Remove or replace invalid characters for Excel sheet names."""
-    name = str(name)
-    name = re.sub(r'[:\\/*?\[\]]', '_', name)
-    name = re.sub(r'[^\x00-\x7F]', '_', name)
-    return name[:31]
-
-def get_scottish_weather(api_key, location="Ayrshire"):
-    """Get weather data for Scottish locations"""
-    locations = {
-        "Ayrshire": {"lat": 55.458, "lon": -4.629},
-        "Lanarkshire": {"lat": 55.676, "lon": -3.785},
-        "Glasgow": {"lat": 55.864, "lon": -4.252},
-        "Edinburgh": {"lat": 55.953, "lon": -3.188}
-    }
-    
-    if location in locations:
-        coords = locations[location]
-    else:
-        coords = locations["Ayrshire"]
-    
-    base_url = "http://api.openweathermap.org/data/2.5/weather"
-    params = {
-        'lat': coords["lat"],
-        'lon': coords["lon"],
-        'appid': api_key,
-        'units': 'metric'
-    }
-    
-    try:
-        response = requests.get(base_url, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Error fetching weather data: {e}")
-        return None
-
-@st.cache_data(ttl=1800)
-def get_weather_forecast(api_key, location="Ayrshire"):
-    """Get 5-day forecast for Scottish locations"""
-    locations = {
-        "Ayrshire": {"lat": 55.458, "lon": -4.629},
-        "Lanarkshire": {"lat": 55.676, "lon": -3.785}
-    }
-    
-    if location in locations:
-        coords = locations[location]
-    else:
-        coords = locations["Ayrshire"]
-    
-    base_url = "http://api.openweathermap.org/data/2.5/forecast"
-    params = {
-        'lat': coords["lat"],
-        'lon': coords["lon"],
-        'appid': api_key,
-        'units': 'metric'
-    }
-    
-    try:
-        response = requests.get(base_url, params=params, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Forecast API error: {e}")
-        return None
-
 def poles_to_word(df: pd.DataFrame) -> BytesIO:
-    """Convert pole data to Word document"""
     doc = Document()
-    
+
     df = df.copy()
     df = df.replace(to_replace=["nan", "NaN", "None", None], value="")
-    
+
     grouped = df.groupby('pole', sort=False)
-    
+
     for pole, group in grouped:
         pole_str = str(pole).strip()
         if not pole_str:
             continue
-        
+
         unique_texts = OrderedDict()
-        
+
         for _, row in group.iterrows():
             parts = []
             wi = str(row.get('Work instructions', '')).strip()
             comment = str(row.get('comment', '')).strip()
-            
+
             if wi:
                 parts.append(wi)
             if comment:
@@ -171,57 +172,74 @@ def poles_to_word(df: pd.DataFrame) -> BytesIO:
                 text = " ".join(parts)
                 normalized = text.lower().strip()
                 unique_texts[normalized] = text
-        
+
         if not unique_texts:
             continue
-        
+
         p = doc.add_paragraph(style='List Bullet')
         run_number = p.add_run(f"{pole_str} – ")
         run_number.bold = True
         run_number.font.name = 'Times New Roman'
         run_number.font.size = Pt(12)
-        
+
         texts = list(unique_texts.values())
         for i, text in enumerate(texts):
             run_item = p.add_run(text)
             run_item.bold = True
             run_item.font.name = 'Times New Roman'
             run_item.font.size = Pt(12)
-            
+
             if "Erect Pole" in text:
                 run_item.font.highlight_color = WD_COLOR_INDEX.RED
-            
+
             if i < len(texts) - 1:
                 p.add_run(" ; ")
-    
+
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
-def normalize_cols(df):
-    """Normalize column names"""
+def normalize_columns(df):
+    """Normalize column names to lowercase with underscores"""
     df = df.copy()
     df.columns = (
         df.columns
+        .astype(str)
         .str.strip()
         .str.lower()
         .str.replace(" ", "_")
+        .str.replace(r"[^\w]", "_", regex=True)
     )
     return df
 
 @st.cache_data
-def safe_read_parquet(path, label=None):
-    """Safely read parquet files"""
-    try:
-        df = pd.read_parquet(path, engine="pyarrow")
-        df = normalize_cols(df)
-        if label:
-            st.sidebar.success(f"{label} loaded")
-        return df
-    except Exception as e:
-        st.sidebar.error(f"Failed to load {path}: {e}")
-        return None
+def load_data_files():
+    """Load all required data files"""
+    files_to_load = {
+        "aggregated": "CF_aggregated.parquet",
+        "resume": "CF_resume.parquet",
+        "miscellaneous": "miscelaneous.parquet",
+        "pid": "Resumed_PID.parquet"
+    }
+    
+    data = {}
+    
+    for name, filepath in files_to_load.items():
+        try:
+            if os.path.exists(filepath):
+                df = pd.read_parquet(filepath)
+                df = normalize_columns(df)
+                data[name] = df
+                st.sidebar.success(f"✓ {name.replace('_', ' ').title()} loaded")
+            else:
+                st.sidebar.warning(f"⚠ {filepath} not found")
+                data[name] = None
+        except Exception as e:
+            st.sidebar.error(f"✗ Failed to load {filepath}: {e}")
+            data[name] = None
+    
+    return data
 
     
 # --- MAPPINGS ---
@@ -752,8 +770,161 @@ categories = [
 
 
 # ==============================================
-# 4. STREAMLIT UI SETUP
+# FUZZY MATCHING AND DATA MERGING FUNCTIONS
 # ==============================================
+
+def preprocess_string(text):
+    """Preprocess string for better matching"""
+    if pd.isna(text):
+        return ""
+    text = str(text).lower().strip()
+    # Remove extra whitespace and special characters
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'[^\w\s]', '', text)
+    return text
+
+def find_best_match(target, candidates, threshold=75):
+    """Find the best fuzzy match for a target string among candidates"""
+    if not target or not candidates:
+        return None, 0
+    
+    best_match = None
+    best_score = 0
+    
+    for candidate in candidates:
+        if pd.isna(candidate):
+            continue
+            
+        # Calculate similarity score
+        score = fuzz.partial_ratio(preprocess_string(target), preprocess_string(candidate))
+        
+        if score > best_score and score >= threshold:
+            best_score = score
+            best_match = candidate
+    
+    return best_match, best_score
+
+@st.cache_data
+def merge_with_pid_fuzzy(agg_df, pid_df):
+    """
+    Merge aggregated data with PID data using fuzzy matching on project descriptions.
+    Requirements:
+    1. Same project name
+    2. Same shire
+    3. Similar segment description (≥75% similarity)
+    """
+    if pid_df is None or agg_df.empty:
+        return agg_df.copy()
+    
+    # Make copies to avoid modifying originals
+    agg_df = agg_df.copy()
+    pid_df = pid_df.copy()
+    
+    # Ensure required columns exist
+    required_agg_cols = ['project', 'shire', 'segmentdesc']
+    required_pid_cols = ['project', 'shire', 'project_description', 'pid_ohl_nr']
+    
+    missing_agg = [col for col in required_agg_cols if col not in agg_df.columns]
+    missing_pid = [col for col in required_pid_cols if col not in pid_df.columns]
+    
+    if missing_agg:
+        st.warning(f"Missing columns in aggregated data: {missing_agg}")
+        return agg_df
+    
+    if missing_pid:
+        st.warning(f"Missing columns in PID data: {missing_pid}")
+        return agg_df
+    
+    # Create a list to store matched rows
+    matched_rows = []
+    
+    # Get unique combinations from aggregated data
+    unique_combinations = agg_df[['project', 'shire']].drop_duplicates()
+    
+    # Progress tracking
+    progress_bar = st.progress(0)
+    total_combinations = len(unique_combinations)
+    
+    st.sidebar.info(f"Fuzzy matching {total_combinations} project/shire combinations...")
+    
+    for idx, (project, shire) in enumerate(unique_combinations.itertuples(index=False, name=None)):
+        # Update progress
+        progress_bar.progress((idx + 1) / total_combinations)
+        
+        # Filter aggregated data for this project/shire combination
+        agg_subset = agg_df[(agg_df['project'] == project) & (agg_df['shire'] == shire)]
+        
+        # Filter PID data for the same project/shire combination
+        pid_subset = pid_df[(pid_df['project'] == project) & (pid_df['shire'] == shire)]
+        
+        if pid_subset.empty:
+            # No PID data for this combination, keep original rows
+            matched_rows.append(agg_subset)
+            continue
+        
+        # Get unique segment descriptions from PID data
+        pid_descriptions = pid_subset['project_description'].dropna().unique()
+        
+        # For each row in aggregated data, find best match
+        for _, agg_row in agg_subset.iterrows():
+            segment_desc = agg_row['segmentdesc']
+            
+            if pd.isna(segment_desc):
+                # No segment description to match, keep as is
+                matched_rows.append(pd.DataFrame([agg_row]))
+                continue
+            
+            # Find best fuzzy match
+            best_match, match_score = find_best_match(segment_desc, pid_descriptions, threshold=75)
+            
+            if best_match and match_score >= 75:
+                # Get the PID OHL Nr for the matched description
+                matched_pid_row = pid_subset[
+                    pid_subset['project_description'] == best_match
+                ].iloc[0]
+                
+                # Create a new row with PID information
+                new_row = agg_row.copy()
+                new_row['matched_project_description'] = best_match
+                new_row['match_score'] = match_score
+                new_row['pid_ohl_nr'] = matched_pid_row['pid_ohl_nr']
+                new_row['project_description'] = best_match
+                
+                # Add other PID columns if they exist
+                for col in pid_subset.columns:
+                    if col not in new_row.index and col not in ['project', 'shire']:
+                        new_row[col] = matched_pid_row[col]
+                
+                matched_rows.append(pd.DataFrame([new_row]))
+            else:
+                # No good match found, keep original
+                matched_rows.append(pd.DataFrame([agg_row]))
+    
+    progress_bar.empty()
+    
+    # Combine all matched rows
+    if matched_rows:
+        result_df = pd.concat(matched_rows, ignore_index=True)
+        
+        # Fill NaN for unmatched rows
+        result_df['matched_project_description'] = result_df['matched_project_description'].fillna('No Match')
+        result_df['match_score'] = result_df['match_score'].fillna(0)
+        result_df['pid_ohl_nr'] = result_df['pid_ohl_nr'].fillna('Not Available')
+        
+        # Count matches
+        matched_count = (result_df['match_score'] >= 75).sum()
+        total_count = len(result_df)
+        
+        st.sidebar.success(f"✓ Fuzzy matching complete: {matched_count}/{total_count} rows matched (≥75%)")
+        
+        return result_df
+    else:
+        return agg_df
+
+# ==============================================
+# MAIN APPLICATION
+# ==============================================
+
 # --- Gradient background ---
 gradient_bg = """
 <style>
@@ -774,8 +945,8 @@ try:
     logo_left = Image.open("Images/GaeltecImage.png").resize((80, 80))
     logo_right = Image.open("Images/SPEN.png").resize((160, 80))
 except:
-    st.warning("Logo images not found. Please check file paths.")
     logo_left = logo_right = None
+    st.warning("Logo images not found")
 
 # --- Header layout ---
 col1, col2, col3 = st.columns([1, 4, 1])
@@ -791,69 +962,70 @@ with col3:
 st.markdown("<h1>📊 Data Management Dashboard</h1>", unsafe_allow_html=True)
 
 # ==============================================
-# 5. FIXED DATA LOADING
+# DATA LOADING AND PROCESSING
 # ==============================================
-@st.cache_data
-def load_data():
-    """Load all data files"""
-    agg_view = safe_read_parquet("CF_aggregated.parquet", "Aggregated data")
-    resume_df = safe_read_parquet("CF_resume.parquet", "Resume data")
-    misc_df = safe_read_parquet("miscelaneous.parquet", "Miscellaneous data")
-    pid_df = safe_read_parquet("Resume_PID.parquet", "PID data")
-    
-    return agg_view, resume_df, misc_df, pid_df
 
-agg_view, resume_df, misc_df, pid_df = load_data()
+# Load all data files
+data = load_data_files()
 
-# Check if data loaded successfully
-if agg_view is None:
-    st.error("Failed to load main data file. Please check if 'CF_aggregated.parquet' exists.")
+# Check if main data is loaded
+if data.get("aggregated") is None:
+    st.error("Failed to load main aggregated data. Please check if 'CF_aggregated.parquet' exists.")
     st.stop()
 
-# ==============================================
-# 6. FIXED DATA PROCESSING
-# ==============================================
-# Process date columns
-if "datetouse" in agg_view.columns:
-    agg_view["datetouse_dt"] = pd.to_datetime(
-        agg_view["datetouse"], errors="coerce"
-    ).dt.normalize()
-    agg_view["datetouse_display"] = agg_view["datetouse_dt"].dt.strftime("%d/%m/%Y")
-    agg_view.loc[
-        agg_view["datetouse_dt"].isna(), "datetouse_display"
-    ] = "Unplanned"
+agg_df = data["aggregated"]
+resume_df = data["resume"]
+misc_df = data["miscellaneous"]
+pid_df = data["pid"]
+
+# Process date columns in aggregated data
+if "datetouse" in agg_df.columns:
+    agg_df["datetouse_dt"] = pd.to_datetime(agg_df["datetouse"], errors="coerce")
+    agg_df["datetouse_display"] = agg_df["datetouse_dt"].dt.strftime("%d/%m/%Y")
+    agg_df.loc[agg_df["datetouse_dt"].isna(), "datetouse_display"] = "Unplanned"
+    agg_df["datetouse_dt"] = agg_df["datetouse_dt"].dt.normalize()
 else:
-    agg_view["datetouse_dt"] = pd.NaT
-    agg_view["datetouse_display"] = "Unplanned"
+    agg_df["datetouse_dt"] = pd.NaT
+    agg_df["datetouse_display"] = "Unplanned"
 
-# Merge with PID data
-merge_keys = ["project", "shire", "pid_ohl_nr"]
+# ==============================================
+# FUZZY MERGE WITH PID DATA
+# ==============================================
 
-def normalize_merge_keys(df, keys):
-    """Normalize merge key columns"""
-    for k in keys:
-        if k not in df.columns:
-            df[k] = ""
-        df[k] = df[k].astype(str).str.strip().str.lower()
-    return df
+st.sidebar.header("🔗 Data Integration")
+fuzzy_match_enabled = st.sidebar.checkbox("Enable Fuzzy Matching with PID Data", value=True, 
+                                          help="Match aggregated data with PID data using project descriptions (≥75% similarity)")
 
-agg_view = normalize_merge_keys(agg_view, merge_keys)
-if pid_df is not None:
-    pid_df = normalize_merge_keys(pid_df, merge_keys)
-    
-    enriched_df = agg_view.merge(
-        pid_df,
-        on=merge_keys,
-        how="left",
-        suffixes=("", "_meta")
-    )
+if fuzzy_match_enabled and pid_df is not None:
+    with st.spinner("Performing fuzzy matching with PID data..."):
+        enriched_df = merge_with_pid_fuzzy(agg_df, pid_df)
+        
+        # Show matching statistics
+        if 'match_score' in enriched_df.columns:
+            matched = (enriched_df['match_score'] >= 75).sum()
+            total = len(enriched_df)
+            st.sidebar.info(f"**Fuzzy Match Results:**\n{matched}/{total} rows matched ({(matched/total*100):.1f}%)")
 else:
-    enriched_df = agg_view.copy()
-    st.warning("PID data not available. Some features may be limited.")
+    enriched_df = agg_df.copy()
+    if fuzzy_match_enabled and pid_df is None:
+        st.sidebar.warning("PID data not available for fuzzy matching")
 
 # ==============================================
-# 7. FIXED SIDEBAR FILTERS
+# APPLY MISC DATA MAPPING
 # ==============================================
+
+if misc_df is not None and "item" in enriched_df.columns:
+    # Map material codes from misc data
+    misc_df["column_b"] = misc_df["column_b"].astype(str)
+    material_map = misc_df.set_index("column_b")["column_k"].to_dict()
+    enriched_df["material_code"] = enriched_df["item"].map(material_map)
+else:
+    enriched_df["material_code"] = None
+
+# ==============================================
+# SIDEBAR FILTERS
+# ==============================================
+
 st.sidebar.header("📊 Filters")
 
 def multi_select_filter(col, label, df, parent=None):
@@ -885,11 +1057,20 @@ selected_pm, filtered_df = multi_select_filter(
     "projectmanager", "Project Manager", filtered_df, ("shire", selected_shire)
 )
 
+# Add PID OHL Nr filter if available
+if 'pid_ohl_nr' in filtered_df.columns:
+    selected_pid, filtered_df = multi_select_filter(
+        "pid_ohl_nr", "PID OHL Nr", filtered_df
+    )
+
 # ==============================================
-# 8. FIXED DATE FILTER (ADD MISSING LOGIC)
+# DATE FILTER
 # ==============================================
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Date Range Filter")
+
+date_range_str = "All dates"
 
 if 'datetouse_dt' in filtered_df.columns:
     min_date = filtered_df['datetouse_dt'].min()
@@ -905,13 +1086,14 @@ if 'datetouse_dt' in filtered_df.columns:
         
         if len(date_range) == 2:
             start_date, end_date = date_range
+            start_dt = pd.Timestamp(start_date)
+            end_dt = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+            
             filtered_df = filtered_df[
-                (filtered_df['datetouse_dt'] >= pd.Timestamp(start_date)) &
-                (filtered_df['datetouse_dt'] <= pd.Timestamp(end_date))
+                (filtered_df['datetouse_dt'] >= start_dt) &
+                (filtered_df['datetouse_dt'] <= end_dt)
             ]
             date_range_str = f"{start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')}"
-        else:
-            date_range_str = "All dates"
     else:
         date_range_str = "Date data unavailable"
         st.sidebar.info("No valid date data available")
@@ -920,15 +1102,8 @@ else:
     st.sidebar.info("Date column not found in data")
 
 # ==============================================
-# 9. MAIN DASHBOARD DISPLAY
+# DASHBOARD DISPLAY - FINANCIAL SUMMARY
 # ==============================================
-# Apply misc material mapping
-if misc_df is not None and "item" in filtered_df.columns:
-    filtered_df["item"] = filtered_df["item"].astype(str)
-    misc_df["column_b"] = misc_df["column_b"].astype(str)
-    
-    material_map = misc_df.set_index("column_b")["column_k"].to_dict()
-    filtered_df["material code"] = filtered_df["item"].map(material_map)
 
 # Calculate totals
 total_sum, variation_sum = 0, 0
@@ -953,13 +1128,18 @@ formatted_variation = f"{variation_sum:,.2f}".replace(",", " ").replace(".", ","
 st.markdown("<h2>Financial</h2>", unsafe_allow_html=True)
 st.markdown("<h3 style='text-align:center; color:white;'>Revenue</h3>", unsafe_allow_html=True)
 
-# Money logo display
+# Try to display money logo
 try:
     money_logo = Image.open("Images/Pound.png").resize((40, 40))
     buffered = BytesIO()
     money_logo.save(buffered, format="PNG")
     money_logo_base64 = base64.b64encode(buffered.getvalue()).decode()
     
+    has_logo = True
+except:
+    has_logo = False
+
+if has_logo:
     st.markdown(
         f"""
         <div style='display:flex; justify-content:center;'>
@@ -973,28 +1153,34 @@ try:
                     <img src='data:image/png;base64,{money_logo_base64}' width='28' height='28'/>
                 </div>
                 <p style='text-align:center; font-size:14px; margin-top:4px;'>
-                    ({date_range_str}, Shires: {len(selected_shire) if 'All' not in selected_shire else 'All'}, 
-                    Projects: {len(selected_project) if 'All' not in selected_project else 'All'})
+                    ({date_range_str} | Shires: {len(selected_shire) if 'All' not in selected_shire else 'All'} | 
+                    Projects: {len(selected_project) if 'All' not in selected_project else 'All'} | 
+                    PMs: {len(selected_pm) if 'All' not in selected_pm else 'All'})
                 </p>
             </div>
         </div>
         """,
         unsafe_allow_html=True
     )
-except:
+else:
     st.markdown(
         f"""
         <div style='text-align:center;'>
             <h2 style='color:#32CD32;'>Total: {formatted_total}</h2>
             <h3 style='color:#32CD32;'>Variation: {formatted_variation}</h3>
+            <p style='font-size:14px;'>
+                ({date_range_str} | Shires: {len(selected_shire) if 'All' not in selected_shire else 'All'} | 
+                Projects: {len(selected_project) if 'All' not in selected_project else 'All'})
+            </p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
 # ==============================================
-# 10. REVENUE CHART (FIXED)
+# REVENUE CHART
 # ==============================================
+
 st.markdown("<h3 style='text-align:center; color:white;'>Revenue Trend</h3>", unsafe_allow_html=True)
 
 try:
@@ -1050,557 +1236,508 @@ try:
         st.info("No data available for revenue chart.")
 except Exception as e:
     st.warning(f"Could not generate revenue chart: {str(e)}")
+
+# ==============================================
+# PROJECTS AND WORKS SECTIONS (Adapted for enriched data)
+# ==============================================
+
+# Display Projects Distribution
+col_top_left, col_top_right = st.columns([1, 1])
+
+with col_top_left:
+    st.markdown("<h3 style='text-align:center; color:white;'>Projects Distribution</h3>", unsafe_allow_html=True)
+    
+    try:
+        if not filtered_df.empty and 'project' in filtered_df.columns:
+            project_counts = filtered_df['project'].value_counts().reset_index()
+            project_counts.columns = ['Project', 'total']
+            
+            if len(project_counts) > 8:
+                top_projects = project_counts.head(7)
+                other_count = project_counts['total'].iloc[7:].sum()
+                other_row = pd.DataFrame({'Project': ['Other'], 'total': [other_count]})
+                project_data = pd.concat([top_projects, other_row], ignore_index=True)
+            else:
+                project_data = project_counts
+            
+            fig_projects = px.pie(
+                project_data,
+                names='Project',
+                values='total',
+                title="",
+                hole=0.4
+            )
+            fig_projects.update_traces(
+                textinfo='percent+label',
+                textfont_size=14,
+                marker=dict(line=dict(color='#000000', width=1))
+            )
+            fig_projects.update_layout(
+                title_text="",
+                title_font_size=16,
+                font=dict(color='white'),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                showlegend=False,
+                annotations=[dict(text=f'Total<br>{len(filtered_df)}', x=0.5, y=0.5, font_size=16, showarrow=False)]
+            )
+            
+            st.plotly_chart(fig_projects, use_container_width=True)
+        else:
+            st.info("No project data available.")
+    except Exception as e:
+        st.warning(f"Could not generate projects pie chart: {str(e)}")
+
+# Works total
+with col_top_right:
+    # Left side: Projects & Segments Overview and Works Complete pie chart
+    col_left_top, col_left_bottom = st.columns([1, 1])
+    
+    with col_left_top:
+        st.markdown("<h3 style='color:white;'>Projects & Segments Overview</h3>", unsafe_allow_html=True)
+
+        if 'project' in filtered_df.columns and 'segmentcode' in filtered_df.columns:
+            projects = filtered_df['project'].dropna().unique()
+            if len(projects) == 0:
+                st.info("No projects found for the selected filters.")
+            else:
+                for proj in sorted(projects):
+                    segments = filtered_df[filtered_df['project'] == proj]['segmentcode'].dropna().unique()
                 
-    # Display Project and completion
-    col_top_left, col_top_right = st.columns([1, 1])
-    # Project Completion
-    with col_top_left:
-        st.markdown("<h3 style='text-align:center; color:white;'>Projects Distribution</h3>", unsafe_allow_html=True)
-        # --- Top-right Pie Chart: Projects Distribution ---
-        try:
-            if 'filtered_df' in locals() and not filtered_df.empty and 'project' in filtered_df.columns:
-                
-                # Count projects and get top projects
-                project_counts = filtered_df['project'].value_counts().reset_index()
-                project_counts.columns = ['Project', 'total']
-                
-                # If too many projects, group smaller ones into "Other"
-                if len(project_counts) > 8:
-                    top_projects = project_counts.head(7)
-                    other_count = project_counts['total'].iloc[7:].sum()
-                    other_row = pd.DataFrame({'Project': ['Other'], 'total': [other_count]})
-                    project_data = pd.concat([top_projects, other_row], ignore_index=True)
-                else:
-                    project_data = project_counts
-                
-                # Create pie chart
-                fig_projects = px.pie(
-                    project_data,
-                    names='Project',
-                    values='total',
-                    title="",
-                    hole=0.4
+                    # Use expander to make segment list scrollable
+                    with st.expander(f"Project: {proj} ({len(segments)} segments)"):
+                        if len(segments) > 0:
+                            # Scrollable container for segments
+                            st.markdown(
+                                "<div style='max-height:150px; overflow-y:auto; padding:5px; border:1px solid #444;'>"
+                                + "<br>".join(segments.astype(str))
+                                + "</div>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            st.write("No segment codes for this project.")
+        else:
+            st.info("Project or Segment Code columns not found in the data.")
+
+# -------------------------------
+# --- Works Complete Pie Chart ---
+# -------------------------------
+st.markdown("<h3 style='text-align:center; color:white;'>Works Complete</h3>", unsafe_allow_html=True)
+try:
+    if 'resume_df' in locals():
+        filtered_segments = filtered_df['segment'].dropna().astype(str).str.strip().str.lower().unique()
+        resume_df['section'] = resume_df['section'].dropna().astype(str).str.strip().str.lower()
+
+        if {'section', '%complete'}.issubset(resume_df.columns):
+            resume_filtered = resume_df[resume_df['section'].isin(filtered_segments)]
+
+            if not resume_filtered.empty:
+                avg_complete = resume_filtered['%complete'].mean()
+                avg_complete = min(max(avg_complete, 0), 100)
+
+                pie_data = pd.DataFrame({
+                    'Status': ['Completed', 'Done or Remaining'],
+                    'Value': [avg_complete, 100 - avg_complete]
+                })
+
+                fig_pie = px.pie(
+                    pie_data,
+                    names='Status',
+                    values='Value',
+                    color='Status',
+                    color_discrete_map={'Completed': 'green', 'Done or Remaining': 'red'},
+                    hole=0.6
                 )
-                fig_projects.update_traces(
+                fig_pie.update_traces(
                     textinfo='percent+label',
-                    textfont_size=14,
-                    marker=dict(line=dict(color='#000000', width=1))
+                    textfont_size=20
                 )
-                fig_projects.update_layout(
+                fig_pie.update_layout(
                     title_text="",
-                    title_font_size=16,
+                    title_font_size=20,
                     font=dict(color='white'),
                     paper_bgcolor='rgba(0,0,0,0)',
                     plot_bgcolor='rgba(0,0,0,0)',
-                    showlegend=False,
-                    annotations=[dict(text=f'Total<br>{len(filtered_df)}', x=0.5, y=0.5, font_size=16, showarrow=False)]
+                    showlegend=True,
+                    legend=dict(font=dict(color='white'))
                 )
-                
-                st.plotly_chart(fig_projects, use_container_width=True)
-                
-            else:
-                st.info("No project data available for the selected filters.")
-                
-        except Exception as e:
-            st.warning(f"Could not generate projects pie chart: {e}")
 
-    # Works total
-    with col_top_right:
-        # Left side: Projects & Segments Overview and Works Complete pie chart
-        col_left_top, col_left_bottom = st.columns([1, 1])
-        
-        with col_left_top:
-            st.markdown("<h3 style='color:white;'>Projects & Segments Overview</h3>", unsafe_allow_html=True)
-
-            if 'project' in filtered_df.columns and 'segmentcode' in filtered_df.columns:
-                projects = filtered_df['project'].dropna().unique()
-                if len(projects) == 0:
-                    st.info("No projects found for the selected filters.")
-                else:
-                    for proj in sorted(projects):
-                        segments = filtered_df[filtered_df['project'] == proj]['segmentcode'].dropna().unique()
-                    
-                        # Use expander to make segment list scrollable
-                        with st.expander(f"Project: {proj} ({len(segments)} segments)"):
-                            if len(segments) > 0:
-                                # Scrollable container for segments
-                                st.markdown(
-                                    "<div style='max-height:150px; overflow-y:auto; padding:5px; border:1px solid #444;'>"
-                                    + "<br>".join(segments.astype(str))
-                                    + "</div>",
-                                    unsafe_allow_html=True
-                                )
-                            else:
-                                st.write("No segment codes for this project.")
+                st.plotly_chart(fig_pie, use_container_width=True)
             else:
-                st.info("Project or Segment Code columns not found in the data.")
-        
-            
-            # --- Pie Chart: % Complete ---
+                st.info("No matching sections found for the selected filters to generate % completion chart.")
+
+except Exception as e:
+    st.warning(f"Could not generate % Complete pie chart: {e}")
+    
 # -------------------------------
-    # --- Works Complete Pie Chart ---
-    # -------------------------------
-    st.markdown("<h3 style='text-align:center; color:white;'>Works Complete</h3>", unsafe_allow_html=True)
-    try:
-        if 'resume_df' in locals():
-            filtered_segments = filtered_df['segment'].dropna().astype(str).str.strip().str.lower().unique()
-            resume_df['section'] = resume_df['section'].dropna().astype(str).str.strip().str.lower()
+# --- Map Section ---
+# -------------------------------
+col_map, col_desc = st.columns([2, 1])
+with col_map:
+    st.header("🗺️ Regional Map View")
+    folder_path = r"Maps"
+    file_list = glob.glob(os.path.join(folder_path, "*.json"))
 
-            if {'section', '%complete'}.issubset(resume_df.columns):
-                resume_filtered = resume_df[resume_df['section'].isin(filtered_segments)]
+    if not file_list:
+        st.error(f"No JSON files found in folder: {folder_path}")
+    else:
+        gdf_list = [gpd.read_file(file) for file in file_list]
+        combined_gdf = gpd.GeoDataFrame(pd.concat(gdf_list, ignore_index=True), crs=gdf_list[0].crs)
 
-                if not resume_filtered.empty:
-                    avg_complete = resume_filtered['%complete'].mean()
-                    avg_complete = min(max(avg_complete, 0), 100)
-
-                    pie_data = pd.DataFrame({
-                        'Status': ['Completed', 'Done or Remaining'],
-                        'Value': [avg_complete, 100 - avg_complete]
-                    })
-
-                    fig_pie = px.pie(
-                        pie_data,
-                        names='Status',
-                        values='Value',
-                        color='Status',
-                        color_discrete_map={'Completed': 'green', 'Done or Remaining': 'red'},
-                        hole=0.6
-                    )
-                    fig_pie.update_traces(
-                        textinfo='percent+label',
-                        textfont_size=20
-                    )
-                    fig_pie.update_layout(
-                        title_text="",
-                        title_font_size=20,
-                        font=dict(color='white'),
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        showlegend=True,
-                        legend=dict(font=dict(color='white'))
-                    )
-
-                    st.plotly_chart(fig_pie, use_container_width=True)
+        if "region" in filtered_df.columns:
+            active_regions = filtered_df["region"].dropna().unique().tolist()
+            wards_to_select = []
+            for region in active_regions:
+                if region in mapping_region:
+                    wards_to_select.extend(mapping_region[region])
                 else:
-                    st.info("No matching sections found for the selected filters to generate % completion chart.")
-
-    except Exception as e:
-        st.warning(f"Could not generate % Complete pie chart: {e}")
-        
-    # -------------------------------
-    # --- Map Section ---
-    # -------------------------------
-    col_map, col_desc = st.columns([2, 1])
-    with col_map:
-        st.header("🗺️ Regional Map View")
-        folder_path = r"Maps"
-        file_list = glob.glob(os.path.join(folder_path, "*.json"))
-
-        if not file_list:
-            st.error(f"No JSON files found in folder: {folder_path}")
+                    wards_to_select.append(region)
+            wards_to_select = list(set(wards_to_select))
+            areas_of_interest = combined_gdf[combined_gdf["WD13NM"].isin(wards_to_select)]
         else:
-            gdf_list = [gpd.read_file(file) for file in file_list]
-            combined_gdf = gpd.GeoDataFrame(pd.concat(gdf_list, ignore_index=True), crs=gdf_list[0].crs)
+            areas_of_interest = pd.DataFrame()
 
-            if "region" in filtered_df.columns:
-                active_regions = filtered_df["region"].dropna().unique().tolist()
-                wards_to_select = []
-                for region in active_regions:
-                    if region in mapping_region:
-                        wards_to_select.extend(mapping_region[region])
-                    else:
-                        wards_to_select.append(region)
-                wards_to_select = list(set(wards_to_select))
-                areas_of_interest = combined_gdf[combined_gdf["WD13NM"].isin(wards_to_select)]
-            else:
-                areas_of_interest = pd.DataFrame()
+        if not areas_of_interest.empty:
+            areas_of_interest["geometry_simplified"] = areas_of_interest.geometry.simplify(tolerance=0.01)
+            centroid = areas_of_interest.geometry_simplified.centroid.unary_union.centroid
 
-            if not areas_of_interest.empty:
-                areas_of_interest["geometry_simplified"] = areas_of_interest.geometry.simplify(tolerance=0.01)
-                centroid = areas_of_interest.geometry_simplified.centroid.unary_union.centroid
-
-                # Red flag
-                flag_data = pd.DataFrame({"lon": [centroid.x], "lat": [centroid.y], "icon_name": ["red_flag"]})
-                icon_mapping = {
-                    "red_flag": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/Red_flag_icon.svg/128px-Red_flag_icon.png",
-                        "width": 128, "height": 128, "anchorY": 128
-                    }
+            # Red flag
+            flag_data = pd.DataFrame({"lon": [centroid.x], "lat": [centroid.y], "icon_name": ["red_flag"]})
+            icon_mapping = {
+                "red_flag": {
+                    "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/Red_flag_icon.svg/128px-Red_flag_icon.png",
+                    "width": 128, "height": 128, "anchorY": 128
                 }
+            }
 
-                polygon_layer = pdk.Layer(
-                    "GeoJsonLayer",
-                    areas_of_interest["geometry_simplified"].__geo_interface__,
-                    stroked=True,
-                    filled=True,
-                    get_fill_color=[160, 120, 80, 200],
-                    get_line_color=[0, 0, 0],
-                    pickable=True
+            polygon_layer = pdk.Layer(
+                "GeoJsonLayer",
+                areas_of_interest["geometry_simplified"].__geo_interface__,
+                stroked=True,
+                filled=True,
+                get_fill_color=[160, 120, 80, 200],
+                get_line_color=[0, 0, 0],
+                pickable=True
+            )
+
+            flag_layer = pdk.Layer(
+                "IconLayer",
+                data=flag_data,
+                get_icon="icon_name",
+                get_size=4,
+                size_scale=15,
+                get_position='[lon, lat]',
+                pickable=True,
+                icon_mapping=icon_mapping
+            )
+
+            view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=8, pitch=0)
+
+            st.pydeck_chart(
+                pdk.Deck(
+                    layers=[polygon_layer, flag_layer],
+                    initial_view_state=view_state,
+                    map_style="mapbox://styles/mapbox/outdoors-v11"
                 )
-
-                flag_layer = pdk.Layer(
-                    "IconLayer",
-                    data=flag_data,
-                    get_icon="icon_name",
-                    get_size=4,
-                    size_scale=15,
-                    get_position='[lon, lat]',
-                    pickable=True,
-                    icon_mapping=icon_mapping
-                )
-
-                view_state = pdk.ViewState(latitude=centroid.y, longitude=centroid.x, zoom=8, pitch=0)
-
-                st.pydeck_chart(
-                    pdk.Deck(
-                        layers=[polygon_layer, flag_layer],
-                        initial_view_state=view_state,
-                        map_style="mapbox://styles/mapbox/outdoors-v11"
-                    )
-                )
-            else:
-                st.info("No matching regions found for the selected filters.")
+            )
+        else:
+            st.info("No matching regions found for the selected filters.")
 
 
-    with col_desc:
-        st.markdown("<h3 style='color:white;'>Weather</h3>", unsafe_allow_html=True)
+with col_desc:
+    st.markdown("<h3 style='color:white;'>Weather</h3>", unsafe_allow_html=True)
+    
+    # --- Scottish Weather Widget ---
+    try:
+        # Get API key from secrets
+        api_key = st.secrets.get("d4d09fcf1373f72c30b970fb20d51fd9")
         
-        # --- Scottish Weather Widget ---
-        try:
-            # Get API key from secrets
-            api_key = st.secrets.get("d4d09fcf1373f72c30b970fb20d51fd9")
+        if not api_key:
+            st.info("Weather API key not configured")
+        else:
+            # Location selector
+            location = st.selectbox(
+                "Select Location",
+                ["Ayrshire", "Lanarkshire", "Glasgow", "Edinburgh"],
+                index=0,
+                key="weather_location"
+            )
             
-            if not api_key:
-                st.info("Weather API key not configured")
+            if st.button("Refresh Weather", key="refresh_weather"):
+                st.rerun()
+            
+            # Get current weather
+            weather_data = get_scottish_weather(api_key, location)
+            
+            if weather_data:
+                # Display weather information
+                temp = weather_data['main']['temp']
+                feels_like = weather_data['main']['feels_like']
+                humidity = weather_data['main']['humidity']
+                wind_speed = weather_data['wind']['speed']
+                description = weather_data['weather'][0]['description'].title()
+                icon_code = weather_data['weather'][0]['icon']
+                
+                # Weather icon and description
+                col_icon, col_desc = st.columns([1, 2])
+                with col_icon:
+                    st.image(f"http://openweathermap.org/img/wn/{icon_code}@2x.png", width=50)
+                with col_desc:
+                    st.write(f"**{description}**")
+                
+                # Weather metrics
+                st.metric("Temperature", f"{temp}°C", f"Feels like {feels_like}°C")
+                st.metric("Humidity", f"{humidity}%")
+                st.metric("Wind Speed", f"{wind_speed} m/s")
+                
+                # Construction impact assessment
+                st.markdown("---")
+                st.markdown("**Construction Impact:**")
+                impact = assess_construction_impact(weather_data)
+                st.write(impact)
             else:
-                # Location selector
-                location = st.selectbox(
-                    "Select Location",
-                    ["Ayrshire", "Lanarkshire", "Glasgow", "Edinburgh"],
-                    index=0,
-                    key="weather_location"
-                )
+                st.error("Failed to fetch weather data")
                 
-                if st.button("Refresh Weather", key="refresh_weather"):
-                    st.rerun()
-                
-                # Get current weather
-                weather_data = get_scottish_weather(api_key, location)
-                
-                if weather_data:
-                    # Display weather information
-                    temp = weather_data['main']['temp']
-                    feels_like = weather_data['main']['feels_like']
-                    humidity = weather_data['main']['humidity']
-                    wind_speed = weather_data['wind']['speed']
-                    description = weather_data['weather'][0]['description'].title()
-                    icon_code = weather_data['weather'][0]['icon']
-                    
-                    # Weather icon and description
-                    col_icon, col_desc = st.columns([1, 2])
-                    with col_icon:
-                        st.image(f"http://openweathermap.org/img/wn/{icon_code}@2x.png", width=50)
-                    with col_desc:
-                        st.write(f"**{description}**")
-                    
-                    # Weather metrics
-                    st.metric("Temperature", f"{temp}°C", f"Feels like {feels_like}°C")
-                    st.metric("Humidity", f"{humidity}%")
-                    st.metric("Wind Speed", f"{wind_speed} m/s")
-                    
-                    # Construction impact assessment
-                    st.markdown("---")
-                    st.markdown("**Construction Impact:**")
-                    impact = assess_construction_impact(weather_data)
-                    st.write(impact)
-                else:
-                    st.error("Failed to fetch weather data")
-                    
-        except Exception as e:
-            st.warning(f"Could not load weather information: {e}")
+    except Exception as e:
+        st.warning(f"Could not load weather information: {e}")
 
 
 # -------------------------------
 # --- Mapping Bar Charts + Drill-down + Excel Export ---
 # -------------------------------
-    st.header("🪵 Materials")
-    convert_to_miles = st.checkbox("Convert Equipment/Conductor Length to Miles")
+st.header("🪵 Materials")
+convert_to_miles = st.checkbox("Convert Equipment/Conductor Length to Miles")
 
-    categories = [
-        ("Poles 🪵", pole_keys, "Quantity"),
-        ("Transformers ⚡🏭", transformer_keys, "Quantity"),
-        ("Conductors", conductor_keys, "Length (Km)"),
-        ("Conductors_2", conductor_2_keys, "Length (Km)"),
-        ("Equipment", equipment_keys, "Quantity"),
-        ("Insulators", insulator_keys, "Quantity"),
-        ("LV Joints (Kits)", lv_joint_kit_keys, "Quantity"),
-        ("LV Joint Modules", lv_joint_module_keys, "Quantity"),
-        ("HV Joints / Terminations ⚡", hv_joint_termination_keys, "Quantity"),
-        ("Cable Accessories 🔌", cable_accessory_keys, "Quantity"),
-        ("Foundation & Steelwork 🏗️", foundation_steelwork_keys, "Quantity")
-    ]
+categories = [
+    ("Poles 🪵", pole_keys, "Quantity"),
+    ("Transformers ⚡🏭", transformer_keys, "Quantity"),
+    ("Conductors", conductor_keys, "Length (Km)"),
+    ("Conductors_2", conductor_2_keys, "Length (Km)"),
+    ("Equipment", equipment_keys, "Quantity"),
+    ("Insulators", insulator_keys, "Quantity"),
+    ("LV Joints (Kits)", lv_joint_kit_keys, "Quantity"),
+    ("LV Joint Modules", lv_joint_module_keys, "Quantity"),
+    ("HV Joints / Terminations ⚡", hv_joint_termination_keys, "Quantity"),
+    ("Cable Accessories 🔌", cable_accessory_keys, "Quantity"),
+    ("Foundation & Steelwork 🏗️", foundation_steelwork_keys, "Quantity")
+]
 
-    def sanitize_sheet_name(name: str) -> str:
-        name = str(name)
-        name = re.sub(r'[:\\/*?\[\]\n\r]', '_', name)
-        name = re.sub(r'[^\x00-\x7F]', '_', name)  # remove Unicode like m²
-        return name[:31]
+def sanitize_sheet_name(name: str) -> str:
+    name = str(name)
+    name = re.sub(r'[:\\/*?\[\]\n\r]', '_', name)
+    name = re.sub(r'[^\x00-\x7F]', '_', name)  # remove Unicode like m²
+    return name[:31]
 
 
-    for cat_name, keys, y_label in categories:
+for cat_name, keys, y_label in categories:
 
-        # Only process if columns exist
-        if 'item' not in filtered_df.columns or 'mapped' not in filtered_df.columns:
-            st.warning("Missing required columns: item / mapped")
-            continue
+    # Only process if columns exist
+    if 'item' not in filtered_df.columns or 'mapped' not in filtered_df.columns:
+        st.warning("Missing required columns: item / mapped")
+        continue
+        
+    # Build regex pattern for this category's keys
+    pattern = '|'.join([re.escape(k) for k in keys.keys()])
+
+    mask = filtered_df['item'].astype(str).str.contains(pattern, case=False, na=False)
+    sub_df = filtered_df[mask]
+
+    if sub_df.empty:
+        st.info(f"No data found for {cat_name}")
+        continue
+
+    # Aggregate
+    if 'qsub' in sub_df.columns:
+        sub_df['qsub_clean'] = pd.to_numeric(
+            sub_df['qsub'].astype(str).str.replace(" ", "").str.replace(",", ".", regex=False),
+            errors='coerce'
+        )
+        bar_data = sub_df.groupby('mapped')['qsub_clean'].sum().reset_index()
+        bar_data.columns = ['Mapped', 'Total']
+    else:
+        bar_data = sub_df['mapped'].value_counts().reset_index()
+        bar_data.columns = ['Mapped', 'Total']
+
+    # Divide Conductors_2 by 1000
+    if cat_name == "Conductors_2":
+        bar_data['Total'] = bar_data['Total'] / 1000
+
+    # Convert conductor units if needed
+    y_axis_label = y_label
+    if cat_name in ["Conductors", "Conductors_2"] and convert_to_miles:
+        bar_data['Total'] = bar_data['Total'] * 0.621371
+        y_axis_label = "Length (Miles)"
+
+    # Compute grand total for the category
+    grand_total = bar_data['Total'].sum()
+
+    # Update Streamlit subheader with total
+    st.subheader(f"🔹 {cat_name} — Total: {grand_total:,.2f}")
+
+    # Draw the bar chart
+    fig = go.Figure(data=[
+        go.Bar(
+            x=bar_data['Mapped'].astype(str).tolist(),
+            y=bar_data['Total'].astype(float).tolist(),
+            text=bar_data['Total'].astype(float).tolist(),
+            texttemplate='%{y:,.1f}',
+            textposition='outside'
+        )
+    ])
+
+    fig.update_layout(
+        title=f"{cat_name} Overview",
+        xaxis_title="Mapping",
+        yaxis_title=y_axis_label
+    )
+    
+    # Add background colors separately
+    fig.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        yaxis=dict(
+            gridcolor='rgba(255,255,255,0.3)'  # Semi-transparent white grid
+        )
+    )
+
+    # Display the chart
+    st.plotly_chart(fig, use_container_width=True, height=500)
+
+    # COLLAPSIBLE BUTTONS SECTION
+    with st.expander("🔍 Click to explore more information", expanded=False):
+        st.subheader("Select Mapping to Drill-down:")
+        
+        # Option 1: Buttons in columns
+        cols = st.columns(3)  # 3 buttons per row
+        
+        for idx, mapping_value in enumerate(bar_data['Mapped']):
+            col_idx = idx % 3  # Which column to use (0, 1, or 2)
             
-        # Build regex pattern for this category’s keys
-        pattern = '|'.join([re.escape(k) for k in keys.keys()])
+            with cols[col_idx]:
+                button_key = f"btn_{cat_name}_{mapping_value}_{idx}"
+                
+                if st.button(f"📊 {mapping_value}", key=button_key, use_container_width=True):
+                    st.session_state[f"selected_{cat_name}"] = mapping_value
+                    st.rerun()  # Refresh to show the details immediately
 
-        mask = filtered_df['item'].astype(str).str.contains(pattern, case=False, na=False)
-        sub_df = filtered_df[mask]
+    # Check if a mapping was selected
+    selected_mapping = st.session_state.get(f"selected_{cat_name}")
+    
+    if selected_mapping:
+        st.subheader(f"Details for: **{selected_mapping}**")
+        
+        # Add a button to clear the selection
+        if st.button("❌ Clear Selection", key=f"clear_{cat_name}"):
+            del st.session_state[f"selected_{cat_name}"]
+            st.rerun()
+        
+        selected_rows = sub_df[sub_df['mapped'] == selected_mapping].copy()
+        selected_rows.columns = selected_rows.columns.str.strip().str.lower()
+        selected_rows = selected_rows.loc[:, ~selected_rows.columns.duplicated()]
 
-        if sub_df.empty:
-            st.info(f"No data found for {cat_name}")
-            continue
+        if 'datetouse' in selected_rows.columns:
+            selected_rows['datetouse_display'] = pd.to_datetime(
+                selected_rows['datetouse'], errors='coerce'
+            ).dt.strftime("%d/%m/%Y")
+            selected_rows.loc[selected_rows['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
 
-        # Aggregate
-        if 'qsub' in sub_df.columns:
-            sub_df['qsub_clean'] = pd.to_numeric(
-                sub_df['qsub'].astype(str).str.replace(" ", "").str.replace(",", ".", regex=False),
-                errors='coerce'
-            )
-            bar_data = sub_df.groupby('mapped')['qsub_clean'].sum().reset_index()
-            bar_data.columns = ['Mapped', 'Total']
+
+        # Your original approach but working:
+        extra_cols = ['poling team','team_name','segmentdesc','segmentcode', 'projectmanager', 'project', 'shire','material code' , 'sourcefile','pid_ohl_nr']
+
+        # --- Rename columns for display ---
+        rename_map = {
+            "poling team": "code", 
+            "team_name": "team lider"
+        }
+        selected_rows = selected_rows.rename(columns=rename_map)
+
+        # Update extra_cols to match renamed columns
+        for old, new in rename_map.items():
+            extra_cols = [new if c == old else c for c in extra_cols]
+
+        # Ensure all extra_cols exist in selected_rows
+        for col in extra_cols:
+            if col not in selected_rows.columns:
+                selected_rows[col] = None
+
+        # --- Create display date column ---
+        if 'datetouse' in selected_rows.columns:
+            selected_rows['datetouse_display'] = pd.to_datetime(
+                selected_rows['datetouse'], errors='coerce'
+            ).dt.strftime("%d/%m/%Y")
+            selected_rows.loc[selected_rows['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
+
+        # --- Columns to display ---
+        display_cols = ['mapped','pole','qsub','datetouse_display'] + extra_cols
+        display_cols = [c for c in display_cols if c in selected_rows.columns]
+
+        # --- Display dataframe ---
+        if not selected_rows.empty:
+            st.dataframe(selected_rows[display_cols], use_container_width=True)
+            st.write(f"**Total records:** {len(selected_rows)}")
+
+            if 'qsub_clean' in selected_rows.columns:
+                total_qsub = selected_rows['qsub_clean'].sum()
+                st.write(f"Total QSUB: {total_qsub:,.2f}")
         else:
-            bar_data = sub_df['mapped'].value_counts().reset_index()
-            bar_data.columns = ['Mapped', 'Total']
+            st.info("No records found for this selection")
 
-        # Divide Conductors_2 by 1000
-        if cat_name == "Conductors_2":
-            bar_data['Total'] = bar_data['Total'] / 1000
+        # --- Excel Export: Aggregated ---
+        buffer_agg = BytesIO()
+        with pd.ExcelWriter(buffer_agg, engine='openpyxl') as writer:
+            aggregated_df = pd.DataFrame()
+            for bar_value in bar_data['Mapped']:
+                df_bar = sub_df[sub_df['mapped'] == bar_value].copy()
+                df_bar = df_bar.loc[:, ~df_bar.columns.duplicated()]
+                if 'datetouse' in df_bar.columns:
+                    df_bar['datetouse_display'] = pd.to_datetime(
+                        df_bar['datetouse'], errors='coerce'
+                    ).dt.strftime("%d/%m/%Y")
+                    df_bar.loc[df_bar['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
 
-        # Convert conductor units if needed
-        y_axis_label = y_label
-        if cat_name in ["Conductors", "Conductors_2"] and convert_to_miles:
-            bar_data['Total'] = bar_data['Total'] * 0.621371
-            y_axis_label = "Length (Miles)"
+                cols_to_include = ['mapped', 'datetouse_display'] + extra_cols
+                cols_to_include = [c for c in cols_to_include if c in df_bar.columns]
+                df_bar = df_bar[cols_to_include]
 
-        # Compute grand total for the category
-        grand_total = bar_data['Total'].sum()
+                aggregated_df = pd.concat([aggregated_df, df_bar], ignore_index=True)
 
-        # Update Streamlit subheader with total
-        st.subheader(f"🔹 {cat_name} — Total: {grand_total:,.2f}")
+            aggregated_df.to_excel(writer, sheet_name='Aggregated', index=False)
 
-        # Draw the bar chart
-        # FIX: Use go.Figure with explicit data types
-        fig = go.Figure(data=[
-            go.Bar(
-                x=bar_data['Mapped'].astype(str).tolist(),
-                y=bar_data['Total'].astype(float).tolist(),
-                text=bar_data['Total'].astype(float).tolist(),
-                texttemplate='%{y:,.1f}',
-                textposition='outside'
-            )
-        ])
-
-        fig.update_layout(
-            title=f"{cat_name} Overview",
-            xaxis_title="Mapping",
-            yaxis_title=y_axis_label
-        )
-        
-        # Add background colors separately
-        fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            yaxis=dict(
-                gridcolor='rgba(255,255,255,0.3)'  # Semi-transparent white grid
-            )
+        buffer_agg.seek(0)
+        st.download_button(
+            f"📥 Download Excel (Aggregated): {cat_name} Details",
+            buffer_agg,
+            file_name=f"{cat_name}_Details_Aggregated.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # Display the chart
-        st.plotly_chart(fig, use_container_width=True, height=500)
+        # Excel Export - Separate Sheets
+        buffer_sep = BytesIO()
+        with pd.ExcelWriter(buffer_sep, engine='openpyxl') as writer:
+            for bar_value in bar_data['Mapped']:
+                df_bar = sub_df[sub_df['mapped'] == bar_value].copy()
+                df_bar = df_bar.loc[:, ~df_bar.columns.duplicated()]
+                if 'datetouse' in df_bar.columns:
+                    df_bar['datetouse_display'] = pd.to_datetime(
+                        df_bar['datetouse'], errors='coerce'
+                    ).dt.strftime("%d/%m/%Y")
+                    df_bar.loc[df_bar['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
 
-        # COLLAPSIBLE BUTTONS SECTION
-        with st.expander("🔍 Click to explore more information", expanded=False):
-            st.subheader("Select Mapping to Drill-down:")
-            
-            # Option 1: Buttons in columns
-            cols = st.columns(3)  # 3 buttons per row
-            
-            for idx, mapping_value in enumerate(bar_data['Mapped']):
-                col_idx = idx % 3  # Which column to use (0, 1, or 2)
-                
-                with cols[col_idx]:
-                    button_key = f"btn_{cat_name}_{mapping_value}_{idx}"
-                    
-                    if st.button(f"📊 {mapping_value}", key=button_key, use_container_width=True):
-                        st.session_state[f"selected_{cat_name}"] = mapping_value
-                        st.rerun()  # Refresh to show the details immediately
+                cols_to_include = ['mapped', 'datetouse_display'] + extra_cols
+                cols_to_include = [c for c in cols_to_include if c in df_bar.columns]
+                df_bar = df_bar[cols_to_include]
 
-        # Check if a mapping was selected
-        selected_mapping = st.session_state.get(f"selected_{cat_name}")
-        
-        if selected_mapping:
-            st.subheader(f"Details for: **{selected_mapping}**")
-            
-            # Add a button to clear the selection
-            if st.button("❌ Clear Selection", key=f"clear_{cat_name}"):
-                del st.session_state[f"selected_{cat_name}"]
-                st.rerun()
-            
-            selected_rows = sub_df[sub_df['mapped'] == selected_mapping].copy()
-            selected_rows.columns = selected_rows.columns.str.strip().str.lower()
-            selected_rows = selected_rows.loc[:, ~selected_rows.columns.duplicated()]
+                sheet_name = sanitize_sheet_name(bar_value)
+                df_bar.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            if 'datetouse' in selected_rows.columns:
-                selected_rows['datetouse_display'] = pd.to_datetime(
-                    selected_rows['datetouse'], errors='coerce'
-                ).dt.strftime("%d/%m/%Y")
-                selected_rows.loc[selected_rows['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
-
-
-            # Your original approach but working:
-            extra_cols = ['poling team','team_name','segmentdesc','segmentcode', 'projectmanager', 'project', 'shire','material code' , 'sourcefile','pid_ohl_nr']
-
-            # --- Rename columns for display ---
-            rename_map = {
-                "poling team": "code", 
-                "team_name": "team lider"
-            }
-            selected_rows = selected_rows.rename(columns=rename_map)
-
-            # Update extra_cols to match renamed columns
-            for old, new in rename_map.items():
-                extra_cols = [new if c == old else c for c in extra_cols]
-
-            # Ensure all extra_cols exist in selected_rows
-            for col in extra_cols:
-                if col not in selected_rows.columns:
-                    selected_rows[col] = None
-
-            # --- Create display date column ---
-            if 'datetouse' in selected_rows.columns:
-                selected_rows['datetouse_display'] = pd.to_datetime(
-                    selected_rows['datetouse'], errors='coerce'
-                ).dt.strftime("%d/%m/%Y")
-                selected_rows.loc[selected_rows['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
-
-            # --- Columns to display ---
-            display_cols = ['mapped','pole','qsub','datetouse_display'] + extra_cols
-            display_cols = [c for c in display_cols if c in selected_rows.columns]
-
-            # --- Display dataframe ---
-            if not selected_rows.empty:
-                st.dataframe(selected_rows[display_cols], use_container_width=True)
-                st.write(f"**Total records:** {len(selected_rows)}")
-    
-                if 'qsub_clean' in selected_rows.columns:
-                    total_qsub = selected_rows['qsub_clean'].sum()
-                    st.write(f"Total QSUB: {total_qsub:,.2f}")
-            else:
-                st.info("No records found for this selection")
-
-            # --- Excel Export: Aggregated ---
-            buffer_agg = BytesIO()
-            with pd.ExcelWriter(buffer_agg, engine='openpyxl') as writer:
-                aggregated_df = pd.DataFrame()
-                for bar_value in bar_data['Mapped']:
-                    df_bar = sub_df[sub_df['mapped'] == bar_value].copy()
-                    df_bar = df_bar.loc[:, ~df_bar.columns.duplicated()]
-
-            # Rename first
-            selected_rows = selected_rows.rename(columns={
-                "poling team": "code", 
-                "team_name": "team lider"
-            })
-
-            # Update the extra_cols list to use new names
-            extra_cols = [c if c != "poling team" else "code" for c in extra_cols]
-            extra_cols = [c if c != "team_name" else "team lider" for c in extra_cols]
-
-
-            # Filter to only existing columns
-            extra_cols = [c for c in extra_cols if c in selected_rows.columns]
-            # DEBUG: show the final columns being used
-            st.write("🔹 Information Resumed:")
-            # Create display date
-            if 'datetouse' in selected_rows.columns:
-                selected_rows['datetouse_display'] = pd.to_datetime(
-                    selected_rows['datetouse'], errors='coerce'
-                ).dt.strftime("%d/%m/%Y")
-                selected_rows.loc[selected_rows['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
-
-            display_cols = ['mapped','pole','qsub','datetouse_display'] + extra_cols
-            display_cols = [c for c in display_cols if c in selected_rows.columns]
-
-            if not selected_rows.empty:
-                st.dataframe(selected_rows[display_cols], use_container_width=True)
-                st.write(f"**Total records:** {len(selected_rows)}")
-    
-                if 'qsub_clean' in selected_rows.columns:
-                    total_qsub = selected_rows['qsub_clean'].sum()
-                    st.write(f"Total QSUB: {total_qsub:,.2f}")
-            else:
-                st.info("No records found for this selection")
-                
-            # Excel Export - Aggregated
-            buffer_agg = BytesIO()
-            with pd.ExcelWriter(buffer_agg, engine='openpyxl') as writer:
-                aggregated_df = pd.DataFrame()
-                for bar_value in bar_data['Mapped']:
-                    df_bar = sub_df[sub_df['mapped'] == bar_value].copy()
-                    df_bar = df_bar.loc[:, ~df_bar.columns.duplicated()]
-                    if 'datetouse' in df_bar.columns:
-                        df_bar['datetouse_display'] = pd.to_datetime(
-                            df_bar['datetouse'], errors='coerce'
-                        ).dt.strftime("%d/%m/%Y")
-                        df_bar.loc[df_bar['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
-
-                    cols_to_include = ['mapped', 'datetouse_display'] + extra_cols
-                    cols_to_include = [c for c in cols_to_include if c in df_bar.columns]
-                    df_bar = df_bar[cols_to_include]
-
-                    aggregated_df = pd.concat([aggregated_df, df_bar], ignore_index=True)
-
-                aggregated_df.to_excel(writer, sheet_name='Aggregated', index=False)
-
-            buffer_agg.seek(0)
-            st.download_button(
-                f"📥 Download Excel (Aggregated): {cat_name} Details",
-                buffer_agg,
-                file_name=f"{cat_name}_Details_Aggregated.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-            # Excel Export - Separate Sheets
-            buffer_sep = BytesIO()
-            with pd.ExcelWriter(buffer_sep, engine='openpyxl') as writer:
-                for bar_value in bar_data['Mapped']:
-                    df_bar = sub_df[sub_df['mapped'] == bar_value].copy()
-                    df_bar = df_bar.loc[:, ~df_bar.columns.duplicated()]
-                    if 'datetouse' in df_bar.columns:
-                        df_bar['datetouse_display'] = pd.to_datetime(
-                            df_bar['datetouse'], errors='coerce'
-                        ).dt.strftime("%d/%m/%Y")
-                        df_bar.loc[df_bar['datetouse'].isna(), 'datetouse_display'] = "Unplanned"
-
-                    cols_to_include = ['mapped', 'datetouse_display'] + extra_cols
-                    cols_to_include = [c for c in cols_to_include if c in df_bar.columns]
-                    df_bar = df_bar[cols_to_include]
-
-                    sheet_name = sanitize_sheet_name(bar_value)
-                    df_bar.to_excel(writer, sheet_name=sheet_name, index=False)
-
-            buffer_sep.seek(0)
-            st.download_button(
-                f"📥 Download Excel (Separated): {cat_name} Details",
-                buffer_sep,
-                file_name=f"{cat_name}_Details_Separated.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
+        buffer_sep.seek(0)
+        st.download_button(
+            f"📥 Download Excel (Separated): {cat_name} Details",
+            buffer_sep,
+            file_name=f"{cat_name}_Details_Separated.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 # -----------------------------
 # 🛠️ Works Section
 # -----------------------------
